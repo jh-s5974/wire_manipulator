@@ -1,0 +1,131 @@
+# policy_checkpoint_path: policy/policy_pre.onnx
+policy_checkpoint_path: policy/policy_pre.pt
+control_dt: 0.004   #
+policy_dt: 0.02     # decimation * sim.dt
+physics_dt: 0.0005   # 
+cutoff_freq: 200
+num_joints: 12
+joints:
+- left_hip_yaw_joint
+- right_hip_yaw_joint
+- left_hip_roll_joint
+- right_hip_roll_joint
+- left_hip_pitch_joint
+- right_hip_pitch_joint
+- left_knee_joint
+- right_knee_joint
+- left_ankle_pitch_joint
+- right_ankle_pitch_joint
+- left_ankle_roll_joint
+- right_ankle_roll_joint
+
+joint_kp:
+- 240.0
+- 240.0
+- 240.0
+- 240.0
+- 100.0
+- 100.0
+- 15.0
+- 15.0
+- 10.0
+- 10.0
+- 10.0
+- 10.0
+
+joint_kd:
+- 5.0
+- 5.0
+- 5.0
+- 5.0
+- 2.5
+- 2.5
+- 1.1
+- 1.1
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+
+effort_limits:
+- 30.0
+- 30.0
+- 30.0
+- 30.0
+- 50.0
+- 50.0
+- 50.0
+- 50.0
+- 6.0
+- 6.0
+- 6.0
+- 6.0
+
+default_base_position:
+- 0.0
+- 0.0
+- 0.77
+default_joint_positions:
+# - 0.0
+# - 0.0
+# - 0.0
+# - 0.0
+# - -0.2
+# - -0.2
+# - 0.4
+# - 0.4
+# - -0.3
+# - -0.3
+# - 0.0
+# - 0.0
+
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+
+joint_reset_positions:
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+
+num_observations: 50
+command_velocity:
+- 0.0
+- 0.0
+- 0.0
+num_actions: 12
+history_length: 0
+action_scale: 0.25
+action_indices:
+- 0
+- 1
+- 2
+- 3
+- 4
+- 5
+- 6
+- 7
+- 8
+- 9
+- 10
+- 11
+action_limit_lower: -10000
+action_limit_upper: 10000
