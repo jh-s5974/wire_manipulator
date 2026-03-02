@@ -1,0 +1,46 @@
+# libbyaml-cpp
+sudo apt install libbyaml-cpp-dev
+
+# mujoco 3.2.0
+wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-x86_64.tar.gz
+tar xf mujoco-3.2.0-linux-x86_64.tar.gz
+mkdir ~/.mujoco
+mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
+
+# libtorch-dev
+wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-2.10.0%2Bcpu.zip
+unzip libtorch-shared-with-deps-2.10.0+cpu.zip
+sudo mv libtorch /opt/libtorch
+
+# pygame
+
+sudo apt install python3-pygame
+
+
+# permission issue fix
+sudo chmod a+x src/mujoco_rl/src/controller_ros_code.py
+sudo chmod a+x src/rlcode/src/controller.py
+
+
+
+
+# web gui
+
+# nvm 설치
+
+# 홈 디렉토리 아무 데서나
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+# 터미널 재시작
+nvm install 22
+nvm use 22
+node -v
+npm -v
+
+
+#sudo apt-get install npm -y
+npm create vite@latest robot-monitor -- --template react-ts
+cd robot-monitor
+npm install
+npm run dev
+
+

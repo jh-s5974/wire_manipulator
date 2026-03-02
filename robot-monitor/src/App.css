@@ -1,0 +1,738 @@
+/* 기본 */
+
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #222;
+  background-color: #f5f7fb;
+}
+
+body {
+  margin: 0;
+}
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f5f7fb;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.08);
+  padding: 24px;
+  text-align: center;
+}
+
+.auth-card h2 {
+  margin: 0 0 8px;
+}
+
+.auth-card p {
+  margin: 0 0 16px;
+  color: #4b5563;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+}
+
+.auth-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.auth-input:disabled {
+  background-color: #f3f4f6;
+  color: #9ca3af;
+}
+
+.app {
+  display: flex;
+  min-height: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.top-mode-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  width: 100%;
+  border-bottom: 1px solid #e0e4ec;
+  background-color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(4px);
+}
+
+.top-mode-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+}
+
+.top-connection {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+  font-weight: 600;
+}
+
+/* 왼쪽 네비게이터 패널 */
+
+.nav-panel {
+  flex: 1;
+  max-width: 260px;
+  padding: 24px 20px;
+  border-right: 1px solid #e0e4ec;
+  background-color: #ffffff;
+}
+
+.nav-panel h3 {
+  margin: 0 0 8px;
+}
+
+.nav-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: default;
+  font-size: 14px;
+  color: #4b5563;
+}
+
+.nav-item + .nav-item {
+  margin-top: 4px;
+}
+
+.nav-item.active {
+  background-color: #e5edff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+/* 오른쪽 메인 패널 */
+
+.main-panel {
+  flex: 3;
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.connection {
+  font-size: 14px;
+}
+
+.text-ok {
+  color: #1f9d55;
+  font-weight: 600;
+}
+
+.text-bad {
+  color: #e3342f;
+  font-weight: 600;
+}
+
+/* 모터 일괄 작업 툴바 */
+
+.toolbar {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.toolbar-label {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.mode-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  background-color: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 9999px;
+}
+
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: #cbd5e1;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  min-width: 62px;
+  font-weight: 700;
+  transition: background-color 0.12s ease, color 0.12s ease,
+    border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.mode-btn:hover {
+  background-color: #94a3b8;
+  color: #1e293b;
+}
+
+.mode-btn-active {
+  background-color: #1d4ed8;
+  color: #ffffff;
+  border-color: #1e40af;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35),
+    0 4px 12px rgba(30, 64, 175, 0.35);
+}
+
+.mode-btn-active:hover {
+  background-color: #1e40af;
+}
+
+.mode-btn-active:disabled {
+  background-color: #1d4ed8;
+  color: #ffffff;
+  border-color: #1e40af;
+  opacity: 0.8;
+}
+
+.mode-btn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: #facc15;
+  box-shadow: 0 0 0 1px rgba(113, 63, 18, 0.45), 0 0 8px rgba(250, 204, 21, 0.85);
+}
+
+/* 카드 */
+
+.card {
+  width: 100%;
+  max-width: 1100px;
+  background-color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 8px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.card-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 테이블 */
+
+.table-wrapper {
+  padding: 8px 16px 12px;
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.data-table thead tr:nth-child(1) {
+  background-color: #eef2ff;
+}
+
+.data-table thead tr:nth-child(2) {
+  background-color: #f3f4f6;
+}
+
+.data-table th,
+.data-table td {
+  padding: 6px 6px;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.data-table th {
+  text-align: center;
+  font-weight: 600;
+}
+
+.head-id,
+.head-name,
+.head-mode,
+.head-control,
+.cell-id,
+.cell-name,
+.cell-mode {
+  text-align: left;
+}
+
+.data-table th.num,
+.data-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.head-group {
+  text-align: center;
+}
+
+/* 상태 row 색 */
+
+.row-error {
+  background-color: #fee2e2;
+}
+
+.row-warning {
+  background-color: #fff7d6;
+}
+
+/* 명령 입력칸 */
+
+.cmd-input {
+  width: 70px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cmd-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+/* 버튼 */
+
+.btn {
+  border-radius: 9999px;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.btn-xs {
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.btn-xxs {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.btn-primary {
+  background-color: #2563eb;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #1d4ed8;
+}
+
+.btn-secondary {
+  background-color: #e5e7eb;
+  color: #111827;
+}
+
+.btn-secondary:hover {
+  background-color: #d1d5db;
+}
+
+.btn-outline {
+  border: 1px solid #d1d5db;
+  background-color: #ffffff;
+  color: #374151;
+}
+
+.btn-outline:hover {
+  background-color: #f3f4f6;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-outline:disabled {
+  background-color: #e5e7eb;
+  color: #9ca3af;
+  border-color: #d1d5db;
+}
+
+.btn-primary:disabled:hover,
+.btn-secondary:disabled:hover,
+.btn-outline:disabled:hover {
+  background-color: #e5e7eb;
+}
+
+/* 버튼 한 줄 배치 */
+
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 슬라이드 토글 스위치 */
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 22px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #e5e7eb;
+  border-radius: 9999px;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  top: 2px;
+  background-color: #ffffff;
+  border-radius: 9999px;
+  transition: transform 0.15s ease;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+}
+
+/* 체크된 상태 (On) */
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #22c55e;
+  box-shadow: 0 0 0 1px #16a34a33;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(22px);
+}
+
+/* 포커스/호버 약간 강조 */
+
+.toggle-switch:hover .toggle-slider {
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.5);
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+  background-color: #e5e7eb;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.toggle-switch input:disabled + .toggle-slider::before {
+  background-color: #f8fafc;
+  box-shadow: none;
+}
+
+.toggle-switch input:disabled:checked + .toggle-slider {
+  background-color: #86efac;
+}
+
+/* IMU 카드 – 폭 줄이기 */
+
+.bottom-row {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.card-imu {
+  max-width: 520px;
+}
+
+.data-table-imu th {
+  width: 140px;
+  text-align: left;
+}
+
+/* 기타 */
+
+.placeholder {
+  margin-top: 24px;
+  color: #6b7280;
+}
+
+.cmd-input:disabled {
+  background-color: #f2f2f2;
+  color: #999;
+  cursor: not-allowed;
+}
+
+.card-plot {
+  max-width: 1100px;
+}
+
+.plot-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plot-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plot-controls {
+  padding: 10px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+}
+
+.plot-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+}
+
+.plot-control-group > label,
+.plot-control-group > span {
+  font-size: 12px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.plot-control-group select {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: #fff;
+  min-width: 140px;
+}
+
+.plot-control-group input[type="number"] {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: #fff;
+  min-width: 140px;
+}
+
+.plot-control-apply {
+  min-width: 220px;
+  justify-content: flex-end;
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+.plot-control-apply span {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.plot-control-fields {
+  min-width: 320px;
+  flex: 1;
+}
+
+.plot-control-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.plot-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.plot-body {
+  padding: 10px 16px 14px;
+}
+
+.plot-panels {
+  padding: 10px 12px 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.plot-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #ffffff;
+  min-width: 0;
+}
+
+.plot-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.plot-panel-header h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #334155;
+}
+
+.plot-panel-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plot-controls-panel {
+  border-bottom: 1px solid #edf1f5;
+}
+
+.plot-chart-wrap {
+  width: 100%;
+}
+
+.plot-svg {
+  width: 100%;
+  display: block;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.plot-grid {
+  stroke: #e2e8f0;
+  stroke-width: 1;
+}
+
+.plot-axis-label {
+  fill: #64748b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plot-legend {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plot-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 9999px;
+  background: #fff;
+  font-size: 11px;
+  color: #334155;
+}
+
+.plot-legend-item strong {
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.plot-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  display: inline-block;
+}
+
+.plot-empty {
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}

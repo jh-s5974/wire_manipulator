@@ -1,0 +1,1585 @@
+// src/App.tsx
+import * as React from "react";
+import "./App.css";
+import { useRobotWs } from "./hooks/useRobotWs";
+import type { MotorState, ImuState, RobotMode } from "./types";
+
+const WS_URL =
+  import.meta.env.VITE_WS_URL ??
+  `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:8080`;
+const getInitialWsPassword = () => {
+  return "";
+};
+const ROBOT_MODES: RobotMode[] = ["IDLE", "MANU", "READY", "RL WALK"];
+
+type MotorCommandFields = {
+  position: string;
+  velocity: string;
+  torque: string;
+  kp: string;
+  kd: string;
+  durationMs: string;
+};
+
+const EMPTY_MOTOR_COMMAND: MotorCommandFields = {
+  position: "",
+  velocity: "",
+  torque: "",
+  kp: "",
+  kd: "",
+  durationMs: "1.000",
+};
+
+const PLACEHOLDER_MOTORS: MotorState[] = Array.from({ length: 12 }, (_, id) => ({
+  id,
+  name: `motor_${id}`,
+  mode: "N/A",
+  position: 0,
+  velocity: 0,
+  torque: 0,
+  temperature: 0,
+  error: false,
+  warning: false,
+  enabled: false,
+}));
+
+const DEFAULT_SAMPLING_MS = 100;
+const DEFAULT_BUFFER_LENGTH = 240;
+const DEFAULT_PLOT_COLUMNS = 2;
+const DEFAULT_PLOT_HEIGHT = 240;
+const MIN_SAMPLING_MS = 20;
+const MAX_SAMPLING_MS = 2000;
+const MIN_BUFFER_LENGTH = 30;
+const MAX_BUFFER_LENGTH = 2000;
+const MIN_PLOT_COLUMNS = 1;
+const MAX_PLOT_COLUMNS = 4;
+const MIN_PLOT_HEIGHT = 160;
+const MAX_PLOT_HEIGHT = 520;
+
+type PlotSource = "motor_stat" | "motor_cmd" | "imu";
+type MotorStatPlotKey = "position" | "velocity" | "torque" | "temperature";
+type MotorCmdPlotKey = "position" | "velocity" | "torque" | "kp" | "kd";
+type ImuPlotKey =
+  | "roll"
+  | "pitch"
+  | "yaw"
+  | "gyro_x"
+  | "gyro_y"
+  | "gyro_z"
+  | "accel_x"
+  | "accel_y"
+  | "accel_z";
+
+type SeriesDef<K extends string> = {
+  key: K;
+  label: string;
+  color: string;
+};
+
+const MOTOR_STAT_SERIES_DEFS: SeriesDef<MotorStatPlotKey>[] = [
+  { key: "position", label: "Pos", color: "#2563eb" },
+  { key: "velocity", label: "Vel", color: "#16a34a" },
+  { key: "torque", label: "Torque", color: "#dc2626" },
+  { key: "temperature", label: "Temp", color: "#d97706" },
+];
+
+const MOTOR_CMD_SERIES_DEFS: SeriesDef<MotorCmdPlotKey>[] = [
+  { key: "position", label: "Cmd Pos", color: "#2563eb" },
+  { key: "velocity", label: "Cmd Vel", color: "#16a34a" },
+  { key: "torque", label: "Cmd Torque", color: "#dc2626" },
+  { key: "kp", label: "Cmd Kp", color: "#7c3aed" },
+  { key: "kd", label: "Cmd Kd", color: "#d97706" },
+];
+
+const IMU_SERIES_DEFS: SeriesDef<ImuPlotKey>[] = [
+  { key: "roll", label: "Roll", color: "#2563eb" },
+  { key: "pitch", label: "Pitch", color: "#16a34a" },
+  { key: "yaw", label: "Yaw", color: "#dc2626" },
+  { key: "gyro_x", label: "Gyro X", color: "#0ea5e9" },
+  { key: "gyro_y", label: "Gyro Y", color: "#7c3aed" },
+  { key: "gyro_z", label: "Gyro Z", color: "#f59e0b" },
+  { key: "accel_x", label: "Accel X", color: "#ef4444" },
+  { key: "accel_y", label: "Accel Y", color: "#22c55e" },
+  { key: "accel_z", label: "Accel Z", color: "#6366f1" },
+];
+
+type PlotSeries = {
+  key: string;
+  label: string;
+  color: string;
+  values: number[];
+};
+
+type PlotPanelConfig = {
+  id: number;
+  source: PlotSource;
+  motorId: number;
+  motorStatFields: MotorStatPlotKey[];
+  motorCmdFields: MotorCmdPlotKey[];
+  imuFields: ImuPlotKey[];
+  scaleMode: "auto" | "fixed";
+  fixedMin: string;
+  fixedMax: string;
+  settingsCollapsed: boolean;
+};
+
+function getPlotSourceLabel(source: PlotSource) {
+  if (source === "motor_stat") return "모터 상태";
+  if (source === "motor_cmd") return "모터 명령";
+  return "IMU";
+}
+
+function getPlotPanelTitle(panel: PlotPanelConfig) {
+  const sourceLabel = getPlotSourceLabel(panel.source);
+  if (panel.source === "imu") {
+    return sourceLabel;
+  }
+  return `${sourceLabel} · Motor ${panel.motorId}`;
+}
+
+function clampInt(value: number, min: number, max: number) {
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+const TimeSeriesPlot = React.memo(function TimeSeriesPlot({
+  series,
+  scaleMode,
+  fixedMin,
+  fixedMax,
+  plotHeight,
+}: {
+  series: PlotSeries[];
+  scaleMode: "auto" | "fixed";
+  fixedMin?: number;
+  fixedMax?: number;
+  plotHeight: number;
+}) {
+  const width = 1020;
+  const height = clampInt(plotHeight, MIN_PLOT_HEIGHT, MAX_PLOT_HEIGHT);
+  const padLeft = 52;
+  const padRight = 14;
+  const padTop = 14;
+  const padBottom = 24;
+
+  const maxLen = Math.max(...series.map((s) => s.values.length), 0);
+  const allValues = series.flatMap((s) => s.values).filter((v) => Number.isFinite(v));
+
+  if (maxLen === 0 || allValues.length === 0) {
+    return <div className="plot-empty">플롯 데이터가 아직 없습니다.</div>;
+  }
+
+  let min = Math.min(...allValues);
+  let max = Math.max(...allValues);
+  if (
+    scaleMode === "fixed" &&
+    fixedMin !== undefined &&
+    fixedMax !== undefined &&
+    Number.isFinite(fixedMin) &&
+    Number.isFinite(fixedMax) &&
+    fixedMax > fixedMin
+  ) {
+    min = fixedMin;
+    max = fixedMax;
+  }
+
+  if (Math.abs(max - min) < 1e-9) {
+    min -= 1;
+    max += 1;
+  }
+
+  const innerW = width - padLeft - padRight;
+  const innerH = height - padTop - padBottom;
+
+  const mapX = (index: number, len: number) =>
+    padLeft + (len <= 1 ? 0 : (index / (len - 1)) * innerW);
+  const mapY = (value: number) => padTop + ((max - value) / (max - min)) * innerH;
+
+  const guideLevels = 4;
+  const guideValues = Array.from({ length: guideLevels + 1 }, (_, idx) => {
+    const ratio = idx / guideLevels;
+    return max - ratio * (max - min);
+  });
+
+  return (
+    <div className="plot-chart-wrap">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="plot-svg"
+        role="img"
+        aria-label="Timeseries plot"
+        style={{ height: `${height}px` }}
+      >
+        {guideValues.map((value) => {
+          const y = mapY(value);
+          return (
+            <g key={`grid-${value.toFixed(6)}`}>
+              <line x1={padLeft} y1={y} x2={width - padRight} y2={y} className="plot-grid" />
+              <text x={padLeft - 8} y={y + 4} textAnchor="end" className="plot-axis-label">
+                {value.toFixed(3)}
+              </text>
+            </g>
+          );
+        })}
+
+        {series.map((s) => {
+          if (s.values.length === 0) return null;
+          const points = s.values
+            .map((value, index) => `${mapX(index, s.values.length)},${mapY(value)}`)
+            .join(" ");
+          return (
+            <polyline
+              key={s.key}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              points={points}
+            />
+          );
+        })}
+      </svg>
+
+      <div className="plot-legend">
+        {series.map((s) => {
+          const latest = s.values[s.values.length - 1];
+          return (
+            <div className="plot-legend-item" key={`legend-${s.key}`}>
+              <span className="plot-legend-dot" style={{ backgroundColor: s.color }} />
+              <span>{s.label}</span>
+              <strong>{Number.isFinite(latest) ? latest.toFixed(3) : "N/A"}</strong>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
+
+function makeInitialCommand(m: MotorState): MotorCommandFields {
+  return {
+    position: (m.command_position ?? m.position).toFixed(3),
+    velocity: (m.command_velocity ?? m.velocity).toFixed(3),
+    torque: (m.command_torque ?? m.torque).toFixed(3),
+    kp:
+      m.command_kp !== undefined
+        ? m.command_kp.toFixed(3)
+        : m.kp !== undefined
+          ? m.kp.toFixed(3)
+          : "0.000",
+    kd:
+      m.command_kd !== undefined
+        ? m.command_kd.toFixed(3)
+        : m.kd !== undefined
+          ? m.kd.toFixed(3)
+          : "0.000",
+    durationMs: "1.000",
+  };
+}
+
+function ImuTable({ imu }: { imu: ImuState | null }) {
+  const renderNum = (value: number | undefined) =>
+    value === undefined ? "N/A" : value.toFixed(3);
+
+  const roll = imu?.orientation_rpy.roll;
+  const pitch = imu?.orientation_rpy.pitch;
+  const yaw = imu?.orientation_rpy.yaw;
+  const gx = imu?.angular_velocity.x;
+  const gy = imu?.angular_velocity.y;
+  const gz = imu?.angular_velocity.z;
+  const ax = imu?.linear_acceleration.x;
+  const ay = imu?.linear_acceleration.y;
+  const az = imu?.linear_acceleration.z;
+
+  return (
+    <div className="card card-imu">
+      <div className="card-header">
+        <h3>IMU</h3>
+      </div>
+      <div className="table-wrapper">
+        <table className="data-table data-table-imu">
+          <tbody>
+            <tr>
+              <th>Orientation (RPY)</th>
+              <td>
+                R={renderNum(roll)}, P={renderNum(pitch)}, Y={renderNum(yaw)}
+              </td>
+            </tr>
+            <tr>
+              <th>Gyro (rad/s)</th>
+              <td>
+                x={renderNum(gx)}, y={renderNum(gy)}, z={renderNum(gz)}
+              </td>
+            </tr>
+            <tr>
+              <th>Accel (m/s²)</th>
+              <td>
+                x={renderNum(ax)}, y={renderNum(ay)}, z={renderNum(az)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+interface MotorCommandRowProps {
+  motor: MotorState;
+  hasData: boolean;
+  canControl: boolean;
+  cmd: MotorCommandFields;
+  onChange: (motorId: number, next: MotorCommandFields) => void;
+  onSync: (motorId: number) => void;
+  onSend: (motorId: number) => void;
+
+  // 🔽 기존 onPowerOn / onPowerOff 대신
+  powered: boolean;
+  onTogglePower: (motorId: number) => void;
+}
+
+const MotorCommandRow = React.memo(function MotorCommandRow({
+  motor,
+  hasData,
+  canControl,
+  cmd,
+  onChange,
+  onSync,
+  onSend,
+  powered,
+  onTogglePower,
+}: MotorCommandRowProps) {
+  const renderNum = (value: number, digits = 3) =>
+    hasData ? value.toFixed(digits) : "N/A";
+
+  const handleFieldChange =
+    (field: keyof MotorCommandFields) =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      onChange(motor.id, { ...cmd, [field]: e.target.value });
+    };
+
+  return (
+    <tr
+      className={
+        hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""
+      }
+    >
+      <td className="cell-id">{motor.id}</td>
+      <td className="cell-name">{motor.name ?? "-"}</td>
+      <td className="cell-mode">{hasData ? motor.mode : "N/A"}</td>
+
+      {/* 현재 상태 */}
+      <td className="num">{renderNum(motor.position)}</td>
+      <td className="num">{renderNum(motor.velocity)}</td>
+      <td className="num">{renderNum(motor.torque)}</td>
+      <td className="num">{hasData ? `${motor.temperature.toFixed(1)}°C` : "N/A"}</td>
+
+      {/* 명령 입력칸 */}
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.position}
+          onChange={handleFieldChange("position")}
+          disabled={!powered || !canControl}
+        />
+      </td>
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.velocity}
+          onChange={handleFieldChange("velocity")}
+          disabled={!powered || !canControl}
+        />
+      </td>
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.torque}
+          onChange={handleFieldChange("torque")}
+          disabled={!powered || !canControl}
+        />
+      </td>
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.kp}
+          onChange={handleFieldChange("kp")}
+          disabled={!powered || !canControl}
+        />
+      </td>
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.kd}
+          onChange={handleFieldChange("kd")}
+          disabled={!powered || !canControl}
+        />
+      </td>
+      <td>
+        <input
+          className="cmd-input"
+          value={cmd.durationMs}
+          onChange={handleFieldChange("durationMs")}
+          disabled={!canControl}
+          title="이동 시간 (초), 0 = 즉시"
+        />
+      </td>
+
+      {/* 컨트롤: Sync / Send + 슬라이드 토글 */}
+      <td>
+        <div className="btn-row">
+          <button className="btn btn-outline btn-xs" onClick={() => onSync(motor.id)} disabled={!hasData}>
+            Sync
+          </button>
+          <button className="btn btn-primary btn-xs" onClick={() => onSend(motor.id)} disabled={!canControl}>
+            Send
+          </button>
+
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={powered}
+              onChange={() => onTogglePower(motor.id)}
+              disabled={!canControl}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+function App() {
+  const [wsPassword, setWsPassword] = React.useState(getInitialWsPassword);
+  const [authPasswordInput, setAuthPasswordInput] = React.useState(getInitialWsPassword);
+  const {
+    connected,
+    state,
+    authStatus,
+    authRetryAt,
+    sendMotorPower,
+    sendMotorCommand,
+    sendMotorControlRequest,
+    sendRobotModeRequest,
+    sendSafetyReset,
+    retryAuth,
+  } = useRobotWs({
+    url: WS_URL,
+    password: wsPassword,
+  });
+
+  const [authRetryNow, setAuthRetryNow] = React.useState(Date.now());
+
+  React.useEffect(() => {
+    if (authStatus !== "failed") {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setAuthRetryNow(Date.now());
+    }, 200);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [authStatus]);
+
+  // 모터별 명령 상태
+  const [motorCommands, setMotorCommands] = React.useState<
+    Record<number, MotorCommandFields>
+  >({});
+  const [showPlot, setShowPlot] = React.useState(false);
+  const [plotPaused, setPlotPaused] = React.useState(false);
+  const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
+  const [plotHeight, setPlotHeight] = React.useState(DEFAULT_PLOT_HEIGHT);
+  const [samplingMs, setSamplingMs] = React.useState(DEFAULT_SAMPLING_MS);
+  const [bufferLength, setBufferLength] = React.useState(DEFAULT_BUFFER_LENGTH);
+  const [draftPlotColumns, setDraftPlotColumns] = React.useState(String(DEFAULT_PLOT_COLUMNS));
+  const [draftPlotHeight, setDraftPlotHeight] = React.useState(String(DEFAULT_PLOT_HEIGHT));
+  const [draftSamplingMs, setDraftSamplingMs] = React.useState(String(DEFAULT_SAMPLING_MS));
+  const [draftBufferLength, setDraftBufferLength] = React.useState(String(DEFAULT_BUFFER_LENGTH));
+  const nextPlotIdRef = React.useRef(2);
+  const lastPlotSampleAtRef = React.useRef(0);
+
+  const [plotPanels, setPlotPanels] = React.useState<PlotPanelConfig[]>([
+    {
+      id: 1,
+      source: "motor_stat",
+      motorId: 0,
+      motorStatFields: ["position", "velocity"],
+      motorCmdFields: ["position", "velocity"],
+      imuFields: ["roll", "pitch", "yaw"],
+      scaleMode: "auto",
+      fixedMin: "-1.0",
+      fixedMax: "1.0",
+      settingsCollapsed: false,
+    },
+  ]);
+
+  const [motorStatPlotHistory, setMotorStatPlotHistory] = React.useState<
+    Record<number, Array<Record<MotorStatPlotKey, number>>>
+  >({});
+  const [motorCmdPlotHistory, setMotorCmdPlotHistory] = React.useState<
+    Record<number, Array<Record<MotorCmdPlotKey, number>>>
+  >({});
+  const [imuPlotHistory, setImuPlotHistory] = React.useState<Array<Record<ImuPlotKey, number>>>([]);
+
+  // 상태 들어오면 아직 없는 모터만 초기화
+  React.useEffect(() => {
+    if (!state) return;
+    setMotorCommands((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const m of state.motors) {
+        if (!next[m.id]) {
+          next[m.id] = makeInitialCommand(m);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [state]);
+
+  React.useEffect(() => {
+    if (!showPlot || !state?.motors.length) return;
+    setPlotPanels((prev) => {
+      let changed = false;
+      const next = prev.map((panel) => {
+        if (panel.source === "imu") {
+          return panel;
+        }
+        const stillExists = state.motors.some((motor) => motor.id === panel.motorId);
+        if (stillExists) {
+          return panel;
+        }
+        changed = true;
+        return { ...panel, motorId: state.motors[0].id };
+      });
+      return changed ? next : prev;
+    });
+  }, [showPlot, state]);
+
+  const trackedMotorIds = React.useMemo(() => {
+    if (!showPlot) {
+      return [] as number[];
+    }
+    const ids = new Set<number>();
+    for (const panel of plotPanels) {
+      if (panel.source === "motor_stat" || panel.source === "motor_cmd") {
+        ids.add(panel.motorId);
+      }
+    }
+    return [...ids];
+  }, [showPlot, plotPanels]);
+
+  const hasImuPanel = React.useMemo(
+    () => showPlot && plotPanels.some((panel) => panel.source === "imu"),
+    [showPlot, plotPanels],
+  );
+
+  React.useEffect(() => {
+    if (!showPlot || !state || plotPaused) return;
+
+    const now = Date.now();
+    if (now - lastPlotSampleAtRef.current < samplingMs) {
+      return;
+    }
+    lastPlotSampleAtRef.current = now;
+
+    if (trackedMotorIds.length > 0) {
+      const motorMap = new Map(state.motors.map((motor) => [motor.id, motor] as const));
+
+      setMotorStatPlotHistory((prev) => {
+        const next = { ...prev };
+        for (const motorId of trackedMotorIds) {
+          const motor = motorMap.get(motorId);
+          if (!motor) continue;
+
+          const history = next[motor.id] ? [...next[motor.id]] : [];
+          history.push({
+            position: motor.position,
+            velocity: motor.velocity,
+            torque: motor.torque,
+            temperature: motor.temperature,
+          });
+          if (history.length > bufferLength) {
+            history.splice(0, history.length - bufferLength);
+          }
+          next[motor.id] = history;
+        }
+        return next;
+      });
+
+      setMotorCmdPlotHistory((prev) => {
+        const next = { ...prev };
+        for (const motorId of trackedMotorIds) {
+          const motor = motorMap.get(motorId);
+          if (!motor) continue;
+
+          const history = next[motor.id] ? [...next[motor.id]] : [];
+          history.push({
+            position: motor.command_position ?? motor.position,
+            velocity: motor.command_velocity ?? motor.velocity,
+            torque: motor.command_torque ?? motor.torque,
+            kp: motor.command_kp ?? motor.kp ?? 0,
+            kd: motor.command_kd ?? motor.kd ?? 0,
+          });
+          if (history.length > bufferLength) {
+            history.splice(0, history.length - bufferLength);
+          }
+          next[motor.id] = history;
+        }
+        return next;
+      });
+    }
+
+    if (hasImuPanel) {
+      setImuPlotHistory((prev) => {
+        const next = [
+          ...prev,
+          {
+            roll: state.imu.orientation_rpy.roll,
+            pitch: state.imu.orientation_rpy.pitch,
+            yaw: state.imu.orientation_rpy.yaw,
+            gyro_x: state.imu.angular_velocity.x,
+            gyro_y: state.imu.angular_velocity.y,
+            gyro_z: state.imu.angular_velocity.z,
+            accel_x: state.imu.linear_acceleration.x,
+            accel_y: state.imu.linear_acceleration.y,
+            accel_z: state.imu.linear_acceleration.z,
+          },
+        ];
+
+        if (next.length > bufferLength) {
+          next.splice(0, next.length - bufferLength);
+        }
+
+        return next;
+      });
+    }
+  }, [showPlot, state, plotPaused, samplingMs, bufferLength, trackedMotorIds, hasImuPanel]);
+
+  React.useEffect(() => {
+    if (!plotPaused) {
+      lastPlotSampleAtRef.current = 0;
+    }
+  }, [plotPaused, samplingMs]);
+
+  React.useEffect(() => {
+    const trimMotorHistory = <K extends string,>(
+      prev: Record<number, Array<Record<K, number>>>,
+    ) => {
+      let changed = false;
+      const next: Record<number, Array<Record<K, number>>> = {};
+      for (const [motorId, history] of Object.entries(prev)) {
+        if (history.length > bufferLength) {
+          next[Number(motorId)] = history.slice(history.length - bufferLength);
+          changed = true;
+        } else {
+          next[Number(motorId)] = history;
+        }
+      }
+      return changed ? next : prev;
+    };
+
+    setMotorStatPlotHistory((prev) => trimMotorHistory(prev));
+    setMotorCmdPlotHistory((prev) => trimMotorHistory(prev));
+
+    setImuPlotHistory((prev) =>
+      prev.length > bufferLength ? prev.slice(prev.length - bufferLength) : prev,
+    );
+  }, [bufferLength]);
+
+  const parseNumberOrUndefined = (s: string): number | undefined => {
+    const trimmed = s.trim();
+    if (!trimmed) return undefined;
+    const v = Number(trimmed);
+    if (Number.isNaN(v)) return undefined;
+    return v;
+  };
+
+  const handleMotorCommandChange = React.useCallback((motorId: number, next: MotorCommandFields) => {
+    setMotorCommands((prev) => ({
+      ...prev,
+      [motorId]: next,
+    }));
+  }, []);
+
+  const handleMotorSyncById = React.useCallback(
+    (motorId: number) => {
+      if (!state) return;
+      const motor = state.motors.find((m) => m.id === motorId);
+      if (!motor) return;
+      setMotorCommands((prev) => ({
+        ...prev,
+        [motor.id]: {
+          ...(prev[motor.id] ?? makeInitialCommand(motor)),
+          position: (motor.command_position ?? motor.position).toFixed(3),
+          velocity: (motor.command_velocity ?? motor.velocity).toFixed(3),
+          torque: (motor.command_torque ?? motor.torque).toFixed(3),
+          kp:
+            motor.command_kp !== undefined
+              ? motor.command_kp.toFixed(3)
+              : motor.kp !== undefined
+                ? motor.kp.toFixed(3)
+                : (prev[motor.id]?.kp ?? "0.000"),
+          kd:
+            motor.command_kd !== undefined
+              ? motor.command_kd.toFixed(3)
+              : motor.kd !== undefined
+                ? motor.kd.toFixed(3)
+                : (prev[motor.id]?.kd ?? "0.000"),
+        },
+      }));
+    },
+    [state],
+  );
+
+  const handleMotorSendById = React.useCallback(
+    (motorId: number) => {
+      if (!state) return;
+      const cmd = motorCommands[motorId];
+      if (!cmd) return;
+      const durationSec = parseNumberOrUndefined(cmd.durationMs);
+      sendMotorCommand(motorId, {
+        position: parseNumberOrUndefined(cmd.position),
+        velocity: parseNumberOrUndefined(cmd.velocity),
+        torque: parseNumberOrUndefined(cmd.torque),
+        kp: parseNumberOrUndefined(cmd.kp),
+        kd: parseNumberOrUndefined(cmd.kd),
+        duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+      });
+    },
+    [state, motorCommands, sendMotorCommand],
+  );
+
+  const handleMotorTogglePowerById = React.useCallback(
+    (motorId: number) => {
+      if (!state) return;
+      const motor = state.motors.find((m) => m.id === motorId);
+      if (!motor) return;
+      sendMotorPower(motorId, !(motor.enabled ?? false));
+    },
+    [state, sendMotorPower],
+  );
+
+  // === 일괄 동작 ===
+
+  // 현재 상태 값으로 전 모터 명령 Sync
+  const handleAllSync = () => {
+    if (!state) return;
+    setMotorCommands((prev) => {
+      const next: Record<number, MotorCommandFields> = { ...prev };
+      for (const m of state.motors) {
+        next[m.id] = {
+          ...(next[m.id] ?? makeInitialCommand(m)),
+          position: (m.command_position ?? m.position).toFixed(3),
+          velocity: (m.command_velocity ?? m.velocity).toFixed(3),
+          torque: (m.command_torque ?? m.torque).toFixed(3),
+          kp:
+            m.command_kp !== undefined
+              ? m.command_kp.toFixed(3)
+              : m.kp !== undefined
+                ? m.kp.toFixed(3)
+              : (next[m.id]?.kp ?? "0.000"),
+          kd:
+            m.command_kd !== undefined
+              ? m.command_kd.toFixed(3)
+              : m.kd !== undefined
+                ? m.kd.toFixed(3)
+              : (next[m.id]?.kd ?? "0.000"),
+        };
+      }
+      return next;
+    });
+  };
+
+  // 각 row에 입력된 값 기준으로 전 모터 Send (각각 메시지 전송)
+  const handleAllSend = () => {
+    if (!state) return;
+    for (const m of state.motors) {
+      const cmd = motorCommands[m.id];
+      if (!cmd) continue;
+      const durationSec = parseNumberOrUndefined(cmd.durationMs);
+      sendMotorCommand(m.id, {
+        position: parseNumberOrUndefined(cmd.position),
+        velocity: parseNumberOrUndefined(cmd.velocity),
+        torque: parseNumberOrUndefined(cmd.torque),
+        kp: parseNumberOrUndefined(cmd.kp),
+        kd: parseNumberOrUndefined(cmd.kd),
+        duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+      });
+    }
+  };
+
+  const handleAllOn = () => {
+    sendMotorPower("all", true);
+  };
+
+  const handleAllOff = () => {
+    sendMotorPower("all", false);
+  };
+
+  const handleRequestControl = () => {
+    sendMotorControlRequest(true);
+  };
+
+  const handleReleaseControl = () => {
+    sendMotorControlRequest(false);
+  };
+
+  const handleRobotModeRequest = (mode: RobotMode) => {
+    sendRobotModeRequest(mode);
+  };
+
+  const handleSafetyReset = () => {
+    sendSafetyReset();
+  };
+
+  const controlRequested = state?.control?.requested ?? false;
+  const controlGranted = state?.control?.granted ?? false;
+  const canControl = connected && !!state && controlGranted;
+  const [controlDeniedUntil, setControlDeniedUntil] = React.useState(0);
+  const [controlStatusNow, setControlStatusNow] = React.useState(Date.now());
+  const prevControlRequestedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!connected || controlGranted) {
+      prevControlRequestedRef.current = controlRequested;
+      setControlDeniedUntil(0);
+      return;
+    }
+
+    const prevRequested = prevControlRequestedRef.current;
+    if (prevRequested && !controlRequested) {
+      setControlDeniedUntil(Date.now() + 2000);
+    }
+    prevControlRequestedRef.current = controlRequested;
+  }, [connected, controlRequested, controlGranted]);
+
+  React.useEffect(() => {
+    if (controlDeniedUntil <= Date.now()) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setControlStatusNow(Date.now());
+    }, 200);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [controlDeniedUntil]);
+
+  const showRecentlyDenied = !controlGranted && controlDeniedUntil > controlStatusNow;
+
+  React.useEffect(() => {
+    if (!state || controlGranted) {
+      return;
+    }
+
+    setMotorCommands((prev) => {
+      const next: Record<number, MotorCommandFields> = { ...prev };
+      for (const motor of state.motors) {
+        next[motor.id] = {
+          ...(next[motor.id] ?? makeInitialCommand(motor)),
+          position: (motor.command_position ?? motor.position).toFixed(3),
+          velocity: (motor.command_velocity ?? motor.velocity).toFixed(3),
+          torque: (motor.command_torque ?? motor.torque).toFixed(3),
+          kp:
+            motor.command_kp !== undefined
+              ? motor.command_kp.toFixed(3)
+              : motor.kp !== undefined
+                ? motor.kp.toFixed(3)
+                : (next[motor.id]?.kp ?? "0.000"),
+          kd:
+            motor.command_kd !== undefined
+              ? motor.command_kd.toFixed(3)
+              : motor.kd !== undefined
+                ? motor.kd.toFixed(3)
+                : (next[motor.id]?.kd ?? "0.000"),
+        };
+      }
+      return next;
+    });
+  }, [state, controlGranted]);
+
+  const controlStatusText = !connected
+    ? "권한 상태: 미연결"
+    : controlGranted
+      ? "권한 상태: 승인됨"
+      : controlRequested || showRecentlyDenied
+        ? "권한 상태: 거부됨"
+        : "권한 상태: 미요청";
+  const controlStatusClass = !connected
+    ? "text-bad"
+    : controlGranted
+      ? "text-ok"
+      : "text-bad";
+  const currentRobotMode: RobotMode = state?.robot_mode?.current ?? "IDLE";
+  const currentSafetyLevel = state?.safety?.level ?? "ESSENTIAL";
+  const safetyLocked = state?.safety?.locked ?? false;
+
+  const addPlotPanel = () => {
+    const nextId = nextPlotIdRef.current;
+    nextPlotIdRef.current += 1;
+    const firstMotorId = state?.motors?.[0]?.id ?? 0;
+    setPlotPanels((prev) => [
+      ...prev,
+      {
+        id: nextId,
+        source: "motor_stat",
+        motorId: firstMotorId,
+        motorStatFields: ["position", "velocity"],
+        motorCmdFields: ["position", "velocity"],
+        imuFields: ["roll", "pitch", "yaw"],
+        scaleMode: "auto",
+        fixedMin: "-1.0",
+        fixedMax: "1.0",
+        settingsCollapsed: false,
+      },
+    ]);
+  };
+
+  const applyPlotSettings = () => {
+    const parsedColumns = Number(draftPlotColumns);
+    const parsedHeight = Number(draftPlotHeight);
+    const parsedSampling = Number(draftSamplingMs);
+    const parsedBuffer = Number(draftBufferLength);
+    if (
+      !Number.isFinite(parsedColumns) ||
+      !Number.isFinite(parsedHeight) ||
+      !Number.isFinite(parsedSampling) ||
+      !Number.isFinite(parsedBuffer)
+    ) {
+      return;
+    }
+
+    const nextColumns = clampInt(parsedColumns, MIN_PLOT_COLUMNS, MAX_PLOT_COLUMNS);
+    const nextHeight = clampInt(parsedHeight, MIN_PLOT_HEIGHT, MAX_PLOT_HEIGHT);
+    const nextSampling = clampInt(parsedSampling, MIN_SAMPLING_MS, MAX_SAMPLING_MS);
+    const nextBuffer = clampInt(parsedBuffer, MIN_BUFFER_LENGTH, MAX_BUFFER_LENGTH);
+
+    setPlotColumns(nextColumns);
+    setPlotHeight(nextHeight);
+    setSamplingMs(nextSampling);
+    setBufferLength(nextBuffer);
+    setDraftPlotColumns(String(nextColumns));
+    setDraftPlotHeight(String(nextHeight));
+    setDraftSamplingMs(String(nextSampling));
+    setDraftBufferLength(String(nextBuffer));
+    lastPlotSampleAtRef.current = 0;
+  };
+
+  const removePlotPanel = (panelId: number) => {
+    setPlotPanels((prev) => prev.filter((panel) => panel.id !== panelId));
+  };
+
+  const getSeriesForPanel = (panel: PlotPanelConfig): PlotSeries[] => {
+    if (panel.source === "motor_stat") {
+      const history = motorStatPlotHistory[panel.motorId] ?? [];
+      return MOTOR_STAT_SERIES_DEFS.filter((seriesDef) => panel.motorStatFields.includes(seriesDef.key)).map(
+        (seriesDef) => ({
+          ...seriesDef,
+          values: history.map((sample) => sample[seriesDef.key]),
+        }),
+      );
+    }
+
+    if (panel.source === "motor_cmd") {
+      const history = motorCmdPlotHistory[panel.motorId] ?? [];
+      return MOTOR_CMD_SERIES_DEFS.filter((seriesDef) => panel.motorCmdFields.includes(seriesDef.key)).map(
+        (seriesDef) => ({
+          ...seriesDef,
+          values: history.map((sample) => sample[seriesDef.key]),
+        }),
+      );
+    }
+
+    return IMU_SERIES_DEFS.filter((seriesDef) => panel.imuFields.includes(seriesDef.key)).map(
+      (seriesDef) => ({
+        ...seriesDef,
+        values: imuPlotHistory.map((sample) => sample[seriesDef.key]),
+      }),
+    );
+  };
+
+  const updatePlotPanel = (panelId: number, updater: (panel: PlotPanelConfig) => PlotPanelConfig) => {
+    setPlotPanels((prev) => prev.map((panel) => (panel.id === panelId ? updater(panel) : panel)));
+  };
+
+  const handleMotorStatFieldToggle = (panelId: number, field: MotorStatPlotKey) => {
+    updatePlotPanel(panelId, (panel) => {
+      const fields = panel.motorStatFields;
+      if (fields.includes(field)) {
+        if (fields.length === 1) {
+          return panel;
+        }
+        return { ...panel, motorStatFields: fields.filter((item) => item !== field) };
+      }
+      return { ...panel, motorStatFields: [...fields, field] };
+    });
+  };
+
+  const handleMotorCmdFieldToggle = (panelId: number, field: MotorCmdPlotKey) => {
+    updatePlotPanel(panelId, (panel) => {
+      const fields = panel.motorCmdFields;
+      if (fields.includes(field)) {
+        if (fields.length === 1) {
+          return panel;
+        }
+        return { ...panel, motorCmdFields: fields.filter((item) => item !== field) };
+      }
+      return { ...panel, motorCmdFields: [...fields, field] };
+    });
+  };
+
+  const handleImuFieldToggle = (panelId: number, field: ImuPlotKey) => {
+    updatePlotPanel(panelId, (panel) => {
+      const fields = panel.imuFields;
+      if (fields.includes(field)) {
+        if (fields.length === 1) {
+          return panel;
+        }
+        return { ...panel, imuFields: fields.filter((item) => item !== field) };
+      }
+      return { ...panel, imuFields: [...fields, field] };
+    });
+  };
+
+  const hasStateData = !!state;
+  const allPanelsCollapsed =
+    plotPanels.length > 0 && plotPanels.every((panel) => panel.settingsCollapsed);
+  const displayMotors = React.useMemo<MotorState[]>(
+    () => state?.motors ?? PLACEHOLDER_MOTORS,
+    [state],
+  );
+
+  const retryRemainingMs = authRetryAt ? Math.max(0, authRetryAt - authRetryNow) : 0;
+  const retryRemainingSec = Math.ceil(retryRemainingMs / 1000);
+  const canInputPassword = authStatus === "required" || authStatus === "failed";
+  const canSubmitPassword = canInputPassword && retryRemainingMs <= 0 && authPasswordInput.trim().length > 0;
+
+  const handleAuthRetry = (event?: React.FormEvent) => {
+    event?.preventDefault();
+
+    if (!canSubmitPassword) {
+      return;
+    }
+
+    const input = authPasswordInput.trim();
+    if (input.length === 0) {
+      return;
+    }
+
+    window.sessionStorage.setItem("ws_password", input);
+    setWsPassword(input);
+    retryAuth(input);
+  };
+
+  if (authStatus !== "ok") {
+    const title =
+      authStatus === "failed"
+        ? "인증 실패"
+        : authStatus === "required"
+          ? "인증 필요"
+          : "인증 중";
+    const description =
+      authStatus === "failed"
+        ? "비밀번호가 올바르지 않아 접속할 수 없습니다."
+        : authStatus === "required"
+          ? "비밀번호를 입력해야 접속할 수 있습니다."
+          : "서버 인증을 진행 중입니다.";
+    const buttonLabel =
+      retryRemainingMs > 0
+        ? `${retryRemainingSec}초 후 재시도`
+        : canInputPassword
+          ? "비밀번호 입력"
+          : "연결 대기중";
+
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <h2>{title}</h2>
+          <p>{description}</p>
+
+          <form className="auth-form" onSubmit={handleAuthRetry}>
+            <input
+              className="auth-input"
+              type="password"
+              placeholder="비밀번호"
+              value={authPasswordInput}
+              onChange={(event) => setAuthPasswordInput(event.target.value)}
+              disabled={!canInputPassword || retryRemainingMs > 0}
+              autoFocus
+            />
+            <button
+              className="btn btn-primary"
+              type="submit"
+              disabled={!canSubmitPassword}
+            >
+              {buttonLabel}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="top-mode-bar">
+        <div className="top-mode-content">
+          <span className="toolbar-label">로봇 모드:</span>
+          <div className="mode-actions">
+            {ROBOT_MODES.map((mode) => (
+              <button
+                key={mode}
+                className={`btn btn-secondary btn-xs mode-btn ${currentRobotMode === mode ? "mode-btn-active" : ""}`}
+                onClick={() => handleRobotModeRequest(mode)}
+                disabled={!connected || !state}
+              >
+                {currentRobotMode === mode && <span className="mode-btn-dot" aria-hidden="true" />}
+                {mode}
+              </button>
+            ))}
+          </div>
+          <div className="top-connection">
+            SAFETY:
+            <span>{currentSafetyLevel}</span>
+            <span className={safetyLocked ? "text-bad" : "text-ok"}>
+              {safetyLocked ? "LOCK" : "UNLOCK"}
+            </span>
+            <button
+              className="btn btn-secondary btn-xs"
+              onClick={handleSafetyReset}
+              disabled={!connected || !safetyLocked}
+            >
+              LOCK Reset
+            </button>
+          </div>
+          <div className="top-connection">
+            연결 상태:
+            <span className={connected ? "text-ok" : "text-bad"}>
+              {connected ? "Connected" : "Disconnected"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="app">
+        {/* 왼쪽: 네비게이터 */}
+        <div className="nav-panel">
+          <h3>Navigator</h3>
+          <p className="nav-desc">
+            나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
+          </p>
+          <ul className="nav-list">
+            <li className="nav-item active">모터 &amp; IMU 모니터</li>
+            <li className="nav-item">로그 뷰어 (예정)</li>
+            <li className="nav-item">설정 / 튜닝 (예정)</li>
+            <li className="nav-item">디버그 패널 (예정)</li>
+          </ul>
+        </div>
+
+        {/* 오른쪽: 메인 모니터 */}
+        <div className="main-panel">
+          <header className="header">
+            <h2>Robot Monitor</h2>
+          </header>
+
+          {/* 모터 일괄 액션 툴바 */}
+          <div className="toolbar">
+            <span className="toolbar-label">모터 일괄 작업:</span>
+            <span className={controlStatusClass}>{controlStatusText}</span>
+            <button className="btn btn-secondary btn-xs" onClick={handleRequestControl} disabled={!connected}>
+              제어권한 요청
+            </button>
+            <button className="btn btn-secondary btn-xs" onClick={handleReleaseControl} disabled={!connected}>
+              제어권한 해제
+            </button>
+            <button className="btn btn-secondary btn-xs" onClick={handleAllSync} disabled={!connected || !state}>
+              Sync All
+            </button>
+            <button className="btn btn-primary btn-xs" onClick={handleAllSend} disabled={!canControl}>
+              Send All
+            </button>
+            <button className="btn btn-secondary btn-xxs" onClick={handleAllOn} disabled={!canControl}>
+              On All
+            </button>
+            <button className="btn btn-secondary btn-xxs" onClick={handleAllOff} disabled={!canControl}>
+              Off All
+            </button>
+            <button className="btn btn-secondary btn-xs" onClick={() => setShowPlot((prev) => !prev)}>
+              {showPlot ? "Plot Hide" : "Plot Show"}
+            </button>
+          </div>
+
+          <>
+            <div className="card">
+              <div className="card-header">
+                <h3>Motors</h3>
+              </div>
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th rowSpan={2} className="head-id">
+                        ID
+                      </th>
+                      <th rowSpan={2} className="head-name">
+                        Name
+                      </th>
+                      <th rowSpan={2} className="head-mode">
+                        Mode
+                      </th>
+                      <th colSpan={4} className="head-group">
+                        현재 상태
+                      </th>
+                      <th colSpan={6} className="head-group">
+                        명령
+                      </th>
+                      <th rowSpan={2} className="head-control">
+                        Control
+                      </th>
+                    </tr>
+                    <tr>
+                      <th className="num">Pos</th>
+                      <th className="num">Vel</th>
+                      <th className="num">Torque</th>
+                      <th className="num">Temp</th>
+
+                      <th className="num">Pos</th>
+                      <th className="num">Vel</th>
+                      <th className="num">Torque</th>
+                      <th className="num">Kp</th>
+                      <th className="num">Kd</th>
+                      <th className="num">시간(s)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayMotors.map((m) => {
+                      const powered = hasStateData ? (m.enabled ?? false) : false;
+
+                      return (
+                        <MotorCommandRow
+                          key={m.id}
+                          motor={m}
+                          hasData={hasStateData}
+                          canControl={canControl}
+                          cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
+                          onChange={handleMotorCommandChange}
+                          onSync={handleMotorSyncById}
+                          onSend={handleMotorSendById}
+                          powered={powered}
+                          onTogglePower={handleMotorTogglePowerById}
+                        />
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 아래쪽에 IMU 카드 – 폭을 줄여서 덜 허전하게 */}
+            <div className="bottom-row">
+              <ImuTable imu={state?.imu ?? null} />
+            </div>
+
+            {showPlot && (
+              <div className="card card-plot">
+                <div className="card-header">
+                  <div className="plot-header-row">
+                    <h3>Plot Monitor</h3>
+                    <div className="plot-header-actions">
+                      <button
+                        className="btn btn-secondary btn-xs"
+                        onClick={() =>
+                          setPlotPanels((prev) =>
+                            prev.map((panel) => ({
+                              ...panel,
+                              settingsCollapsed: !allPanelsCollapsed,
+                            })),
+                          )
+                        }
+                        disabled={plotPanels.length === 0}
+                      >
+                        {allPanelsCollapsed ? "설정 일괄 펼치기" : "설정 일괄 접기"}
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-xs"
+                        onClick={() => setPlotPaused((prev) => !prev)}
+                      >
+                        {plotPaused ? "Resume" : "Pause"}
+                      </button>
+                      <button className="btn btn-secondary btn-xs" onClick={addPlotPanel}>
+                        + Plot 추가
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="plot-controls">
+                  <div className="plot-control-group">
+                    <label htmlFor="plot-sampling-ms">샘플링 주기 (ms)</label>
+                    <input
+                      id="plot-sampling-ms"
+                      type="number"
+                      min={MIN_SAMPLING_MS}
+                      max={MAX_SAMPLING_MS}
+                      value={draftSamplingMs}
+                      onChange={(e) => setDraftSamplingMs(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="plot-control-group">
+                    <label htmlFor="plot-buffer-length">버퍼 길이 (points)</label>
+                    <input
+                      id="plot-buffer-length"
+                      type="number"
+                      min={MIN_BUFFER_LENGTH}
+                      max={MAX_BUFFER_LENGTH}
+                      value={draftBufferLength}
+                      onChange={(e) => setDraftBufferLength(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="plot-control-group">
+                    <label htmlFor="plot-columns">컬럼 수</label>
+                    <input
+                      id="plot-columns"
+                      type="number"
+                      min={MIN_PLOT_COLUMNS}
+                      max={MAX_PLOT_COLUMNS}
+                      value={draftPlotColumns}
+                      onChange={(e) => setDraftPlotColumns(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="plot-control-group">
+                    <label htmlFor="plot-height-global">플롯 높이 (px)</label>
+                    <input
+                      id="plot-height-global"
+                      type="number"
+                      min={MIN_PLOT_HEIGHT}
+                      max={MAX_PLOT_HEIGHT}
+                      value={draftPlotHeight}
+                      onChange={(e) => setDraftPlotHeight(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="plot-control-group plot-control-apply">
+                    <button className="btn btn-primary btn-xs" onClick={applyPlotSettings}>
+                      Apply
+                    </button>
+                    <span>
+                      적용값: {plotColumns} col / {plotHeight}px / {samplingMs} ms / {bufferLength} pts
+                    </span>
+                  </div>
+                </div>
+
+                {plotPanels.length === 0 ? (
+                  <div className="plot-empty">플롯이 없습니다. + Plot 추가를 눌러주세요.</div>
+                ) : (
+                  <div
+                    className="plot-panels"
+                    style={{ gridTemplateColumns: `repeat(${plotColumns}, minmax(0, 1fr))` }}
+                  >
+                    {plotPanels.map((panel) => {
+                      const panelSeries = getSeriesForPanel(panel);
+
+                      return (
+                        <div className="plot-panel" key={panel.id}>
+                          <div className="plot-panel-header">
+                            <h4>{getPlotPanelTitle(panel)}</h4>
+                            <div className="plot-panel-header-actions">
+                              <button
+                                className="btn btn-secondary btn-xs"
+                                onClick={() =>
+                                  updatePlotPanel(panel.id, (prev) => ({
+                                    ...prev,
+                                    settingsCollapsed: !prev.settingsCollapsed,
+                                  }))
+                                }
+                              >
+                                {panel.settingsCollapsed ? "설정 펼치기" : "설정 접기"}
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-xs"
+                                onClick={() => removePlotPanel(panel.id)}
+                              >
+                                - 제거
+                              </button>
+                            </div>
+                          </div>
+
+                          {!panel.settingsCollapsed && (
+                            <div className="plot-controls plot-controls-panel">
+                              <div className="plot-control-group">
+                                <label htmlFor={`plot-source-${panel.id}`}>데이터 소스</label>
+                                <select
+                                  id={`plot-source-${panel.id}`}
+                                  value={panel.source}
+                                  onChange={(e) =>
+                                    updatePlotPanel(panel.id, (prev) => ({
+                                      ...prev,
+                                      source: e.target.value as PlotSource,
+                                    }))
+                                  }
+                                >
+                                  <option value="motor_stat">모터 상태</option>
+                                  <option value="motor_cmd">모터 명령</option>
+                                  <option value="imu">IMU</option>
+                                </select>
+                              </div>
+
+                              {(panel.source === "motor_stat" || panel.source === "motor_cmd") && (
+                                <div className="plot-control-group">
+                                  <label htmlFor={`plot-motor-id-${panel.id}`}>모터 ID</label>
+                                  <select
+                                    id={`plot-motor-id-${panel.id}`}
+                                    value={panel.motorId}
+                                    onChange={(e) =>
+                                      updatePlotPanel(panel.id, (prev) => ({
+                                        ...prev,
+                                        motorId: Number(e.target.value),
+                                      }))
+                                    }
+                                    disabled={!state?.motors.length}
+                                  >
+                                    {(state?.motors ?? []).map((motor) => (
+                                      <option key={`motor-opt-${panel.id}-${motor.id}`} value={motor.id}>
+                                        {motor.id} ({motor.name ?? `motor_${motor.id}`})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              <div className="plot-control-group">
+                                <label htmlFor={`plot-scale-mode-${panel.id}`}>Y 스케일</label>
+                                <select
+                                  id={`plot-scale-mode-${panel.id}`}
+                                  value={panel.scaleMode}
+                                  onChange={(e) =>
+                                    updatePlotPanel(panel.id, (prev) => ({
+                                      ...prev,
+                                      scaleMode: e.target.value as "auto" | "fixed",
+                                    }))
+                                  }
+                                >
+                                  <option value="auto">자동 스케일</option>
+                                  <option value="fixed">고정 스케일</option>
+                                </select>
+                              </div>
+
+                              {panel.scaleMode === "fixed" && (
+                                <>
+                                  <div className="plot-control-group">
+                                    <label htmlFor={`plot-fixed-min-${panel.id}`}>Y Min</label>
+                                    <input
+                                      id={`plot-fixed-min-${panel.id}`}
+                                      type="number"
+                                      step="0.1"
+                                      value={panel.fixedMin}
+                                      onChange={(e) =>
+                                        updatePlotPanel(panel.id, (prev) => ({
+                                          ...prev,
+                                          fixedMin: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </div>
+
+                                  <div className="plot-control-group">
+                                    <label htmlFor={`plot-fixed-max-${panel.id}`}>Y Max</label>
+                                    <input
+                                      id={`plot-fixed-max-${panel.id}`}
+                                      type="number"
+                                      step="0.1"
+                                      value={panel.fixedMax}
+                                      onChange={(e) =>
+                                        updatePlotPanel(panel.id, (prev) => ({
+                                          ...prev,
+                                          fixedMax: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                </>
+                              )}
+
+                              <div className="plot-control-group plot-control-fields">
+                                <span>표시 항목</span>
+
+                                <div className="plot-field-row">
+                                  {panel.source === "motor_stat"
+                                    ? MOTOR_STAT_SERIES_DEFS.map((seriesDef) => (
+                                        <label key={`motor-field-${panel.id}-${seriesDef.key}`}>
+                                          <input
+                                            type="checkbox"
+                                            checked={panel.motorStatFields.includes(seriesDef.key)}
+                                            onChange={() =>
+                                              handleMotorStatFieldToggle(panel.id, seriesDef.key)
+                                            }
+                                          />
+                                          {seriesDef.label}
+                                        </label>
+                                      ))
+                                    : panel.source === "motor_cmd"
+                                      ? MOTOR_CMD_SERIES_DEFS.map((seriesDef) => (
+                                          <label key={`motor-cmd-field-${panel.id}-${seriesDef.key}`}>
+                                            <input
+                                              type="checkbox"
+                                              checked={panel.motorCmdFields.includes(seriesDef.key)}
+                                              onChange={() =>
+                                                handleMotorCmdFieldToggle(panel.id, seriesDef.key)
+                                              }
+                                            />
+                                            {seriesDef.label}
+                                          </label>
+                                        ))
+                                    : IMU_SERIES_DEFS.map((seriesDef) => (
+                                        <label key={`imu-field-${panel.id}-${seriesDef.key}`}>
+                                          <input
+                                            type="checkbox"
+                                            checked={panel.imuFields.includes(seriesDef.key)}
+                                            onChange={() => handleImuFieldToggle(panel.id, seriesDef.key)}
+                                          />
+                                          {seriesDef.label}
+                                        </label>
+                                      ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="plot-body">
+                            {panelSeries.length > 0 ? (
+                              <TimeSeriesPlot
+                                series={panelSeries}
+                                scaleMode={panel.scaleMode}
+                                fixedMin={Number(panel.fixedMin)}
+                                fixedMax={Number(panel.fixedMax)}
+                                plotHeight={plotHeight}
+                              />
+                            ) : (
+                              <div className="plot-empty">표시할 데이터를 1개 이상 선택해주세요.</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;

@@ -1,0 +1,66 @@
+# robot-control 
+
+
+# robot-control 의 의존성 설치 및 빌드
+# libbyaml-cpp
+sudo apt install libbyaml-cpp-dev
+
+# mujoco 3.2.0
+wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-x86_64.tar.gz
+tar xf mujoco-3.2.0-linux-x86_64.tar.gz
+mkdir ~/.mujoco
+mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
+
+# libtorch-dev
+wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-2.10.0%2Bcpu.zip
+unzip libtorch-shared-with-deps-2.10.0+cpu.zip
+sudo mv libtorch /opt/libtorch
+
+cd robot-control
+mkdir build
+cd build
+cmake ..    # 시간이 좀 걸림
+cmake --build . -- -j$(nproc)
+# ./robot_control   # 실행 예시
+# or
+# ./robot_simul    # 시뮬레이터 실행 예시
+
+
+
+
+#robot-monitor 배포 및 systemd 서비스 설정
+
+#npm 구성
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+# 터미널 재시작
+nvm install 22
+nvm use 22
+node -v
+npm -v
+
+# robot-monitor 빌드 및 실행
+cd robot-monitor   # 예시 경로
+npm install               # 한 번만
+npm run build             # dist/ 생성
+npx serve dist        # dist/ 폴더를 웹서버로 띄움 (기본 포트: 3000)
+# http://localhost:3000 접속하여 웹 UI 확인
+
+
+# systemd 서비스 파일 예시 (robot-monitor.service)
+
+sudo nano /etc/systemd/system/robot-monitor.service
+[Unit]
+Description=Robot Web UI
+
+[Service]
+WorkingDirectory=/your/robot/project/robot-monitor
+ExecStart=/usr/bin/npx serve dist
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable robot-monitor
+sudo systemctl start robot-monitor
