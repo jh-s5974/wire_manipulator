@@ -1,0 +1,15 @@
+# Build artifacts
+/build/
+
+# Record files
+*.rtrec
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+
+# OS
+.DS_Store

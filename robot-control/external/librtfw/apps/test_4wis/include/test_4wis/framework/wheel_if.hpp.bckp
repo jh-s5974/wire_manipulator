@@ -1,0 +1,307 @@
+// ip link set can0 up type can bitrate 500000
+#pragma once
+
+#include <string.h>
+
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <string>
+#include <thread>
+
+#include "mobile_crane/framework/signal.hpp"
+#include "mobile_crane/framework/util.hpp"
+
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+// #include <libsocketcan.h>
+#include <errno.h>
+
+using namespace std::chrono_literals;
+using namespace project;
+
+
+class WheelIF {
+  public:
+    struct {
+      std::string interface = "can0";
+      int gear = 50;
+      int16_t rpm_max = 60;
+    } param;
+
+    struct {
+        struct {
+            signal::Tx<bool> state;
+            signal::Tx<std::array<double, 4>> wheel;
+        } tx;
+        struct {
+            signal::Rx<bool>::SharedPtr state;
+            signal::Rx<std::array<double, 4>>::SharedPtr wheel;
+        } rx;
+    } signal;
+
+    std::array<double, 4> rpm_sv = {0};
+    std::array<double, 4> rpm_pv = {0};
+
+    WheelIF(std::string interface="can0", int gear=50, int16_t rpm_max=60): param({interface, gear, rpm_max}) {
+      auto res = setup_can();
+      if (res < 0) {
+        printf("wheel_if: setup %s failed(%d)\n", interface.c_str(), res);
+      } else {
+        printf("wheel if: setup %s succeed\n", interface.c_str());
+      }
+    
+      signal.rx.state = std::make_shared<signal::Rx<bool>>([&](const bool& data) {
+        if (data && !active) {
+          active = data;
+          printf("wheel_if: state=on\n");
+        } 
+        if (!data && active) {
+          wheel_stop();
+          active = data;
+          printf("wheel_if: state=off\n");
+        }
+      });
+      
+      signal.rx.wheel = std::make_shared<signal::Rx<std::array<double, 4>>>([&](const std::array<double, 4>& data) {
+        if (!active)
+          return;
+        // printf("wheel_if: req rpm=[%.0f, %.0f, %.0f, %.0f]\n", data[0], data[1], data[2], data[3]);
+
+        double factor = 0.2;
+        for (auto i=0; i<4; i++) {
+          auto req = data[i];
+          if (req > param.rpm_max) req = param.rpm_max;
+          if (req < -param.rpm_max) req = -param.rpm_max;
+          rpm_sv[i] = req * (1-factor) + rpm_sv[i] * factor;
+          if (std::isnan(rpm_sv[i]) || std::isinf(rpm_sv[i])) {
+            rpm_sv[0] = 0;
+            rpm_sv[1] = 0;
+            rpm_sv[2] = 0;
+            rpm_sv[3] = 0;
+            break;
+          }
+        }
+
+        const int PID_REQ_PID_DATA = 4;
+        const int PID_PNT_VEL_DATA = 177;
+        const int PID_PNT_VEL_CMD = 207;
+
+        uint32_t rmid = 183;
+        uint32_t tmid = 184;
+        
+        uint8_t md_id[2] = {1, 2};
+
+        for (auto i=0; i<sizeof(md_id); i++) {
+          struct can_frame txb;
+          txb.can_id = (rmid << 16) | (tmid << 8) | (md_id[i]) | CAN_EFF_FLAG;
+          txb.can_dlc = 8;
+          txb.data[0] = PID_PNT_VEL_CMD;
+          txb.data[1] = 1;
+          (*(int16_t*)&txb.data[2]) = rpm_sv[i]*param.gear;
+          txb.data[4] = 1;
+          (*(int16_t*)&txb.data[5]) = rpm_sv[i+2]*param.gear;
+          txb.data[7] = 6;
+          send(&txb);
+        }
+      });
+
+        std::thread([&](){
+            printf("wheel if: thread started\n");
+            while (run) {
+                recv();
+            }
+            printf("wheel if: thread finished\n");
+        }).detach();
+    }
+
+    ~WheelIF() {
+      run = false;
+      if (can_so > 0) {
+        wheel_stop();
+        close(can_so);
+      }
+      can_so = -1;
+      printf("wheel if: terminated\n");
+    }
+
+  private:
+    int setup_can() {
+      struct sockaddr_can addr;
+      struct ifreq ifr;
+      int so;
+      if ((so = socket(PF_CAN, SOCK_RAW, CAN_RAW)) < 0)
+        return -2;
+
+      int flags = fcntl(so, F_GETFL, 0);
+      if (flags < 0) {
+        close(so);
+        return -3;
+      }
+
+      if (fcntl(so, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(so);
+        return -4;
+      }
+
+      strcpy(ifr.ifr_name, param.interface.c_str());
+      ioctl(so, SIOCGIFINDEX, &ifr);
+
+      memset(&addr, 0, sizeof(addr));
+      addr.can_family = AF_CAN;
+      addr.can_ifindex = ifr.ifr_ifindex;
+
+      if (bind(so, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(so);
+        return -5;
+      }
+
+      // struct can_filter filters[1];
+      // filters[0].can_id = 0xB8B700 | CAN_EFF_FLAG;
+      // filters[0].can_mask = 0xFFFF00 | (CAN_EFF_FLAG | CAN_RTR_FLAG);
+
+      // int res = setsockopt(so, SOL_CAN_RAW, CAN_RAW_FILTER, &filters, sizeof(filters));
+      // if (res < 0) {
+      //   RCLCPP_ERROR(this->get_logger(), "can filter failed(%d)", errno);
+      //   return -6;
+      // }
+
+      can_so = so;
+      return 0;
+    }
+
+    void recv() {
+      if (can_so < 0)
+        return;
+      struct can_frame rx;
+      int res = read(can_so, &rx, sizeof(rx));
+      if (res < 0) {
+        // RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "can recv error(%d)", errno);
+        return;
+      }
+      if (res > 0)      
+        procedure(rx);
+      if (res == 0) {
+        std::this_thread::sleep_for(1ms);
+      }
+    }
+
+    void send(struct can_frame* txb) {
+      if (can_so < 0)
+        return;
+      if (write(can_so, txb, sizeof(struct can_frame)) > 0)
+          signal.tx.state.send(active);
+    }
+
+    void procedure(struct can_frame& msg) {
+      // TODO: check recv
+        // std::cout << "--------------------" << std::endl;
+
+      // can comm test
+      // std::cout << std::hex << msg.can_id << "  ";
+      // for (int i = 0; i < msg.can_dlc; i++) {
+      //   std::cout << std::hex << int(msg.data[i]) << " ";
+      // }
+      // std::cout << std::dec << std::endl;
+      // struct can_frame* txb = new struct can_frame;
+      // txb->can_id = 0x1234;
+      // txb->can_dlc = 8;
+      // txb->data[0] = 0x01;
+      // txb->data[1] = 0x23;
+      // txb->data[2] = 0x45;
+      // txb->data[3] = 0x67;
+      // txb->data[4] = 0x89;
+      // txb->data[5] = 0xAB;
+      // txb->data[6] = 0xCD;
+      // txb->data[7] = 0xEF;
+      // write(txb);
+
+      const int PID_REQ_PID_DATA = 4;
+      const int PID_PNT_VEL_DATA = 177;
+      const int PID_PNT_VEL_CMD = 207;
+
+
+      auto rmid = (msg.can_id & 0x00ff0000) >> 16;
+      auto tmid = (msg.can_id & 0x0000ff00) >> 8;
+      auto id = (msg.can_id & 0x000000ff);
+
+      typedef struct {
+          bool alarm: 1;
+          bool ctrl_fail: 1;
+          bool over_volt: 1;
+          bool over_temp: 1;
+          bool over_load: 1;
+          bool hall_fail: 1;
+          bool inv_vel: 1;
+          bool stall: 1;
+      } MOT_STATUS;
+
+      switch(msg.data[0]) {
+        case PID_PNT_VEL_DATA: {
+          int16_t rpm[2];
+          rpm[0] = *((int16_t*)&msg.data[1]);
+          rpm[1] = *((int16_t*)&msg.data[3]);
+          MOT_STATUS status = (*(MOT_STATUS*)&msg.data[7]);
+          switch(id) {
+            case 1: {
+              rpm_pv[0] = rpm[0]/param.gear;
+              rpm_pv[2] = rpm[1]/param.gear;
+              break;
+            }
+            case 2: {
+              rpm_pv[1] = rpm[0]/param.gear;
+              rpm_pv[3] = rpm[1]/param.gear;
+              signal.tx.wheel.send(rpm_pv);
+              signal.tx.state.send(active);
+              break;
+            }
+            default: {
+              printf("wheel_if: << rmid=%d, tmid=%d, id=%d, data=%02X %02X %02X %02X %02X %02X %02X %02X\n", 
+                  rmid, tmid, id, msg.data[0], msg.data[1], msg.data[2], msg.data[3], msg.data[4], msg.data[5], msg.data[6], msg.data[7]);
+            }
+          }
+          break;
+        }
+        default: {
+          printf("wheel_if: << rmid=%d, tmid=%d, id=%d, data=%02X %02X %02X %02X %02X %02X %02X %02X\n", 
+              rmid, tmid, id, msg.data[0], msg.data[1], msg.data[2], msg.data[3], msg.data[4], msg.data[5], msg.data[6], msg.data[7]);
+          break;
+        }      
+      }
+    }
+
+    void wheel_stop() {
+      const int PID_REQ_PID_DATA = 4;
+      const int PID_PNT_VEL_DATA = 177;
+      const int PID_PNT_VEL_CMD = 207;
+
+      uint32_t rmid = 183;
+      uint32_t tmid = 184;
+      
+      uint8_t md_id[2] = {1, 2};
+
+      for (auto i=0; i<sizeof(md_id); i++) {
+        struct can_frame txb;
+        txb.can_id = (rmid << 16) | (tmid << 8) | (md_id[i]) | CAN_EFF_FLAG;
+        txb.can_dlc = 8;
+        txb.data[0] = PID_PNT_VEL_CMD;
+        txb.data[1] = 1;
+        (*(int16_t*)&txb.data[2]) = 0;
+        txb.data[4] = 1;
+        (*(int16_t*)&txb.data[5]) = 0;
+        txb.data[7] = 6;
+        send(&txb);
+      }
+    }
+    
+
+  private:
+    bool active;
+    bool run=true;
+
+    int can_so = -1;
+};

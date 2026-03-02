@@ -1,0 +1,6 @@
+add_subdirectory(poc_app)
+add_subdirectory(test_app)
+add_subdirectory(task_onoff_test)
+add_subdirectory(ros_test)
+# add_subdirectory(mobile_crane)
+# add_subdirectory(crane_4wis)

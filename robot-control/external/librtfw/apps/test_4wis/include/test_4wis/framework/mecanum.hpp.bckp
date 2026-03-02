@@ -1,0 +1,136 @@
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <string>
+#include <iostream>
+#include <thread>
+
+#include <eigen3/Eigen/Dense>
+#include "mobile_crane/mecanum.hpp"
+#include "mobile_crane/frame.hpp"
+#include "mobile_crane/framework/signal.hpp"
+#include "mobile_crane/framework/util.hpp"
+
+using namespace std::chrono_literals;
+using namespace project;
+
+/* This example creates a subclass of Node and uses std::bind() to register a
+* member function as a callback from the timer. */
+
+class MecanumNode {
+  public:
+    struct {
+        struct {
+            signal::Tx<bool> state;
+            signal::Tx<se3> velocity;
+            signal::Tx<std::array<double, 4>> wheel;
+
+        } tx;
+        struct {
+            signal::Rx<bool>::SharedPtr state;
+            signal::Rx<se3>::SharedPtr velocity;
+            signal::Rx<std::array<double, 4>>::SharedPtr wheel;
+        } rx;
+    } signal;
+
+    double width = 0.58;      // m
+    double length = 0.25357;  // m
+    double radius = 0.1;       // m
+    double rpm_max = 60;        // rpm
+    se3 vel_max;
+
+    se3 vel_sv;
+    se3 vel_pv;
+
+    MecanumNode(double max_rpm=60): rpm_max(max_rpm) {
+      {
+        Eigen::Matrix<double, 3, 4> fk;
+        mecanum::fk(fk, width, length, radius);
+
+        Eigen::Vector4d rpm;
+        rpm << rpm_max, rpm_max, rpm_max, rpm_max;
+        rpm *= 2*M_PI/60;    // rpm -> rad/s
+        Eigen::Vector3d velx = fk * rpm;
+
+        rpm << -rpm_max, rpm_max, rpm_max, -rpm_max;
+        rpm *= 2*M_PI/60;    // rpm -> rad/s
+        Eigen::Vector3d vely = fk * rpm;
+
+        rpm << -rpm_max, rpm_max, -rpm_max, rpm_max;
+        rpm *= 2*M_PI/60;    // rpm -> rad/s
+        Eigen::Vector3d rot = fk * rpm;
+
+        vel_max.linear.x() = velx[0];
+        vel_max.linear.y() = vely[1];
+        vel_max.angular.z() = rot[2];
+        printf("mecanum: max rpm(%0.lf) -> max velocity=(%.2lf, %.2lf, %.2lf)\n", rpm_max, velx[0], vely[1], rot[2]);
+      }
+
+      signal.rx.state = std::make_shared<signal::Rx<bool>>([&](const bool& data) {
+        if (data) {
+            if (!active) {
+                active = true;
+                std::cout << "mecanum: state=on" << std::endl;
+            }
+        } else {
+            if (active) {
+                active = false;
+                std::cout << "mecanum: state=off" << std::endl;
+            }
+        }
+      });
+
+      signal.rx.velocity = std::make_shared<signal::Rx<se3>>([&](const se3& data) {
+        vel_sv = data;
+        Eigen::Vector3d vel;
+        vel << vel_sv.linear.x(), vel_sv.linear.y(), vel_sv.angular.z();
+        Eigen::Matrix<double, 4, 3> ik;
+        mecanum::ik(ik, width, length, radius);
+
+        Eigen::Vector4d rpm = ik * vel;
+        rpm *= 60/2/M_PI;    // rad/s -> rpm
+        double rpm_norm = rpm.norm();
+        double max_coeff = rpm.cwiseAbs().maxCoeff();
+        if (max_coeff > rpm_max) {
+          // rpm scaling
+          rpm = rpm * rpm_max/max_coeff;
+        }
+        // for (auto i=0; i<4; i++) {
+        //   if (rpm[i] > rpm_max) rpm[i] = rpm_max;
+        //   if (rpm[i] < -rpm_max) rpm[i] = -rpm_max;
+        // }
+        std::array<double, 4> msg_rpm;
+        for (auto i=0; i<4; i++)
+          msg_rpm[i] = rpm[i];
+        signal.tx.wheel.send(msg_rpm);
+      });
+
+      signal.rx.wheel = std::make_shared<signal::Rx<std::array<double, 4>>>([&](const std::array<double, 4>& data) {
+        Eigen::Vector4d rpm;
+        rpm << data[0], data[1], data[2], data[3];
+        rpm *= 2*M_PI/60;    // rpm -> rad/s
+        Eigen::Matrix<double, 3, 4> fk;
+        mecanum::fk_min(fk, width, length, radius);
+
+        Eigen::Vector3d vel = fk * rpm;
+        
+        vel_pv.linear.x() = vel[0];
+        vel_pv.linear.y() = vel[1];
+        vel_pv.angular.z() = vel[2];
+        signal.tx.velocity.send(vel_pv);
+      });
+      std::thread([&](){
+        while (run) {
+            std::this_thread::sleep_for(500ms);
+            signal.tx.state.send(active);
+        }
+      }).detach();
+    }
+
+  private:
+    bool active = false;
+    bool run = true;
+
+    double L[2];
+    double R;
+};
