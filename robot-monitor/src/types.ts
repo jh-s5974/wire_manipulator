@@ -63,6 +63,8 @@ export interface StatePayload {
   safety?: SafetyState;
   motors: MotorState[];
   imu: ImuState;
+  // 로봇에서 직접 보내는 조인트 상태 (URDF 조인트명: 라디안)
+  joint_states?: { [jointName: string]: number };
 }
 
 export interface BaseMessage<T = unknown> {

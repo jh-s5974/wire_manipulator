@@ -154,3 +154,16 @@ action_indices:
 - 10
 - 11
 
+joint_states/names:
+- hip_yaw_left
+- hip_roll_left
+- hip_pitch_left
+- knee_left
+- ankle_pitch_left
+- ankle_roll_left
+- hip_yaw_right
+- hip_roll_right
+- hip_pitch_right
+- knee_right
+- ankle_pitch_right
+- ankle_roll_right

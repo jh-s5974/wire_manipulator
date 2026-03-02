@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 
 using namespace std::chrono_literals;
@@ -75,6 +76,7 @@ private:
     DataWriter<int> dw_robot_mode_request_{"gui/robot/mode_request"};
     DataWriter<rt::Signal> dw_safety_reset_{"manager/reset_signal"};
     Parameter<std::string> p_password{"gui/control_password", ""};
+    Parameter<std::vector<std::string>> p_joint_names_{"joint_states/names"};
     wsbridge::WebsocketBridge bridge_{8080};
 
     std::array<custom_types::MotorState, kMotorCount> motor_cache_{};
@@ -84,8 +86,11 @@ private:
     std::array<bool, kMotorCount> motor_power_on_{};
     std::array<custom_types::MotorCmd, kMotorCount> cmd_cache_{};
 
+    static constexpr int kMaxJointCount = custom_types::kMaxJointCount;
+
     custom_types::Imu imu_cache_{};
     bool imu_online_ = false;
+    int joint_count_ = 0;
     bool control_requested_ = false;
     bool control_granted_ = false;
     int robot_mode_current_ = 0;
@@ -181,6 +186,7 @@ private:
         state.safety.level = safety_level_to_string(safety_level_);
         state.safety.locked = safety_locked_;
         state.motors.reserve(kMotorCount);
+        state.joint_states.reserve(12);
 
         for (int index = 0; index < kMotorCount; ++index) {
             const auto& in = motor_cache_[index];
@@ -230,6 +236,21 @@ private:
             state.imu.gyro = {0.0, 0.0, 0.0};
             state.imu.accel = {0.0, 0.0, 0.0};
         }
+
+        // state.joint_states.clear();
+        std::vector<std::string> joint_names = p_joint_names_.read();
+        state.joint_states[joint_names[0]] = 0;//motor_cache_[0].pos;
+        state.joint_states[joint_names[1]] = 0;//motor_cache_[2].pos;
+        state.joint_states[joint_names[2]] = 0;//motor_cache_[4].pos;
+        state.joint_states[joint_names[3]] = 0;//motor_cache_[6].pos;
+        state.joint_states[joint_names[4]] = 0;//motor_cache_[8].pos;
+        state.joint_states[joint_names[5]] = 0;//motor_cache_[10].pos;
+        state.joint_states[joint_names[6]] = 0;//motor_cache_[1].pos;
+        state.joint_states[joint_names[7]] = 0;//motor_cache_[3].pos;
+        state.joint_states[joint_names[8]] = 0;//motor_cache_[5].pos;
+        state.joint_states[joint_names[9]] = 0;//motor_cache_[7].pos;
+        state.joint_states[joint_names[10]] = 0;//motor_cache_[9].pos;
+        state.joint_states[joint_names[11]] = 0;//motor_cache_[11].pos;
 
         return state;
     }

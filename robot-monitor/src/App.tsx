@@ -1,8 +1,11 @@
 // src/App.tsx
 import * as React from "react";
+import { Suspense } from "react";
 import "./App.css";
 import { useRobotWs } from "./hooks/useRobotWs";
 import type { MotorState, ImuState, RobotMode } from "./types";
+import { RobotScene } from "./components/RobotScene";
+import type { JointState } from "./components/UrdfRobot";
 
 const WS_URL =
   import.meta.env.VITE_WS_URL ??
@@ -1056,6 +1059,12 @@ function App() {
     [state],
   );
 
+  // 로봇에서 직접 받은 joint_states 사용 (없으면 빈 객체)
+  const urdfJointState = React.useMemo<JointState>(
+    () => state?.joint_states ?? {},
+    [state?.joint_states],
+  );
+
   const retryRemainingMs = authRetryAt ? Math.max(0, authRetryAt - authRetryNow) : 0;
   const retryRemainingSec = Math.ceil(retryRemainingMs / 1000);
   const canInputPassword = authStatus === "required" || authStatus === "failed";
@@ -1171,16 +1180,26 @@ function App() {
       <div className="app">
         {/* 왼쪽: 네비게이터 */}
         <div className="nav-panel">
-          <h3>Navigator</h3>
-          <p className="nav-desc">
-            나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
-          </p>
-          <ul className="nav-list">
-            <li className="nav-item active">모터 &amp; IMU 모니터</li>
-            <li className="nav-item">로그 뷰어 (예정)</li>
-            <li className="nav-item">설정 / 튜닝 (예정)</li>
-            <li className="nav-item">디버그 패널 (예정)</li>
-          </ul>
+          {/* 3D 로봇 뷰 - 항상 상단에 표시 */}
+          <div className="nav-robot-viewer">
+            <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
+              <RobotScene jointState={urdfJointState} imuState={state?.imu} />
+            </Suspense>
+          </div>
+
+          {/* 네비게이터 제목 및 탭 */}
+          <div className="nav-content">
+            <h3>Navigator</h3>
+            <p className="nav-desc">
+              나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
+            </p>
+            <ul className="nav-list">
+              <li className="nav-item active">모터 &amp; IMU 모니터</li>
+              <li className="nav-item">로그 뷰어 (예정)</li>
+              <li className="nav-item">설정 / 튜닝 (예정)</li>
+              <li className="nav-item">디버그 패널 (예정)</li>
+            </ul>
+          </div>
         </div>
 
         {/* 오른쪽: 메인 모니터 */}

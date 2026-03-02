@@ -21,9 +21,9 @@ mkdir build
 cd build
 cmake ..    # 시간이 좀 걸림
 cmake --build . -- -j$(nproc)
-# ./robot_control   # 실행 예시
+# ./build/robot_control   # 실행 예시
 # or
-# ./robot_simul    # 시뮬레이터 실행 예시
+# ./build/robot_simul    # 시뮬레이터 실행 예시
 
 
 

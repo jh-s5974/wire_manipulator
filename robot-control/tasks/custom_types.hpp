@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 
 namespace custom_types {
     struct Imu {
@@ -40,5 +41,13 @@ namespace custom_types {
         double duration_ms = 0.0;  // interpolation duration (ms), 0 = immediate
     };
 
+    static constexpr int kMaxJointCount = 20;
+
+    // Fixed-size joint state array for real-time use.
+    // Index-to-name mapping is configured separately via parameter.
+    struct JointStates {
+        int count = 0;
+        std::array<double, kMaxJointCount> positions{};
+    };
 
 }

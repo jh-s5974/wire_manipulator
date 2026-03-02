@@ -75,6 +75,7 @@ struct BridgeState {
 
     std::vector<MotorSnapshot> motors;
     ImuSnapshot imu;
+    std::unordered_map<std::string, double> joint_states;
 };
 
 // JSON 직렬화 (BridgeState -> JSON)
@@ -114,7 +115,8 @@ inline void to_json(json& j, const BridgeState& s) {
         {"robot_mode", {{"current", s.robot_mode.current}}},
         {"safety", {{"level", s.safety.level}, {"locked", s.safety.locked}}},
         {"motors", s.motors},
-        {"imu", s.imu}
+        {"imu", s.imu},
+        {"joint_states", s.joint_states}
     };
 }
 
