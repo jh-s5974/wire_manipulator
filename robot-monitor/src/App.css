@@ -70,6 +70,7 @@ body {
 .app {
   display: flex;
   min-height: 0;
+  width: 100%;
 }
 
 .app-shell {
@@ -110,14 +111,22 @@ body {
 
 /* 왼쪽 네비게이터 패널 */
 
+.nav-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+}
+
 .nav-panel {
-  width: 260px;
-  flex-shrink: 0;
-  border-right: 1px solid #e0e4ec;
+  width: min(320px, calc(100vw - 24px));
+  height: 100vh;
   background-color: #ffffff;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  box-shadow: 16px 0 40px rgba(15, 23, 42, 0.18);
 }
 
 .nav-robot-header {
@@ -133,6 +142,11 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: #374151;
+}
+
+.nav-robot-actions {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .nav-robot-viewer {
@@ -196,7 +210,8 @@ body {
 /* 오른쪽 메인 패널 */
 
 .main-panel {
-  flex: 3;
+  flex: 1 1 auto;
+  width: 100%;
   padding: 24px 32px;
   display: flex;
   flex-direction: column;
@@ -301,7 +316,7 @@ body {
 
 .card {
   width: 100%;
-  max-width: 1100px;
+  max-width: 1280px;
   background-color: #ffffff;
   border-radius: 12px;
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
@@ -320,6 +335,30 @@ body {
   font-weight: 600;
 }
 
+.card-header-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status-legend-cmd {
+  color: #64748b;
+}
+
+.status-legend-now {
+  color: #0f172a;
+}
+
 /* 테이블 */
 
 .table-wrapper {
@@ -333,12 +372,12 @@ body {
   font-size: 12px;
 }
 
-.data-table.status-table  { width: 426px; }
-.data-table.control-table { width: 100%; min-width: 420px; }
+.data-table.status-table  { width: 100%; min-width: 0; }
+.data-table.control-table { width: 100%; min-width: 0; }
 
 .status-table tbody tr,
 .control-table tbody tr {
-  height: 38px;
+  height: 40px;
 }
 
 .motors-panel {
@@ -346,11 +385,19 @@ body {
   gap: 12px;
   align-items: flex-start;
   width: 100%;
-  max-width: 1100px;
+  max-width: 1280px;
 }
 
-.motors-status-card  { flex: 0 0 auto; width: auto; }
-.motors-control-card { flex: 1 1 auto; min-width: 0; width: auto; }
+.motors-status-card  { flex: 1 1 0; min-width: 0; width: auto; }
+.motors-control-card { flex: 1 1 0; min-width: 0; width: auto; }
+
+.motors-status-card .table-wrapper {
+  overflow-x: hidden;
+}
+
+.motors-control-card .table-wrapper {
+  overflow-x: visible;
+}
 
 .data-table thead tr:nth-child(1) {
   background-color: #eef2ff;
@@ -377,7 +424,10 @@ body {
 .head-id,
 .head-name,
 .head-mode,
-.head-control,
+.head-control {
+  text-align: center;
+}
+
 .cell-id,
 .cell-name,
 .cell-mode {
@@ -388,6 +438,17 @@ body {
 .data-table td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Status table: Pos/Vel/Torque 헤더는 cmd(left)/now(right) 분할 셀에 맞춰 center */
+.head-pair {
+  text-align: center;
+  font-weight: 600;
+}
+
+/* Control table: 입력 컬럼 헤더는 풀너비 input에 맞춰 center */
+.control-table thead th.num {
+  text-align: center;
 }
 
 .head-group {
@@ -415,7 +476,7 @@ body {
 /* 일괄 입력 행 / spacer */
 
 .bulk-spacer-row {
-  height: 42px;
+  height: 38px;
   background-color: #f0fdf4;
   border-top: 2px solid #86efac;
   border-bottom: 2px solid #86efac;
@@ -457,7 +518,18 @@ body {
 /* 상태 셀 바 */
 
 .stat-cell {
-  padding: 3px 6px !important;
+  padding: 3px 4px !important;
+}
+
+.status-table .cell-name,
+.status-table .head-name {
+  padding-right: 8px;
+}
+
+.status-table td:nth-child(7),
+.status-table th:nth-child(7) {
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .stat-val {
@@ -467,12 +539,42 @@ body {
   line-height: 1.3;
 }
 
+.status-pair-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.status-pair-cmd,
+.status-pair-now {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.status-pair-cmd {
+  color: #64748b;
+  font-size: 9px;
+}
+
+.status-pair-now {
+  color: #0f172a;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .stat-bar-bg {
   position: relative;
-  height: 5px;
+  height: 3px;
   background: #e5e7eb;
   border-radius: 2px;
   margin-top: 2px;
+  margin-left: 6px;
+  margin-right: 6px;
   overflow: hidden;
 }
 
@@ -510,19 +612,85 @@ body {
 /* 명령 입력칸 */
 
 .cmd-input {
-  width: 52px;
-  padding: 2px 3px;
+  width: 42px;
+  padding: 1px 2px;
   border-radius: 6px;
   border: 1px solid #d1d5db;
-  font-size: 11px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.control-table .stat-cell {
+  padding: 2px 2px !important;
+}
+
+.control-table th,
+.control-table td {
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+.control-table .stat-bar-bg {
+  height: 3px;
+  margin-top: 1px;
+}
+
+.control-table .btn-row {
+  gap: 3px;
+}
+
+.control-table .btn-xs {
+  padding: 3px 7px;
+}
+
+.control-table .toggle-switch {
+  width: 40px;
+  height: 20px;
+}
+
+.control-table .toggle-slider::before {
+  height: 16px;
+  width: 16px;
+}
+
+.control-table .toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
 }
 
 .cmd-input:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+.nav-menu-btn {
+  min-width: 58px;
+}
+
+@media (max-width: 1200px) {
+  .motors-panel {
+    flex-direction: column;
+  }
+
+  .motors-status-card,
+  .motors-control-card {
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .top-mode-content {
+    flex-wrap: wrap;
+  }
+
+  .main-panel {
+    padding: 16px;
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+  }
 }
 
 /* 버튼 */
@@ -600,7 +768,7 @@ body {
 .btn-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* 슬라이드 토글 스위치 */

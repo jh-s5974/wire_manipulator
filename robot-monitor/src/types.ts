@@ -18,6 +18,11 @@ export interface MotorState {
   command_torque?: number;
   command_kp?: number;
   command_kd?: number;
+  driver_command_position?: number;
+  driver_command_velocity?: number;
+  driver_command_torque?: number;
+  driver_command_kp?: number;
+  driver_command_kd?: number;
   kp?: number;
   kd?: number;
 

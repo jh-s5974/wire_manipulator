@@ -33,6 +33,26 @@ const EMPTY_MOTOR_COMMAND: MotorCommandFields = {
   durationMs: "1.000",
 };
 
+const MOTOR_COMMAND_DIGITS: Record<keyof MotorCommandFields, number> = {
+  position: 2,
+  velocity: 2,
+  torque: 2,
+  kp: 1,
+  kd: 1,
+  durationMs: 1,
+};
+
+function formatCommandValue(
+  value: number | undefined,
+  field: keyof MotorCommandFields,
+  fallback = "",
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return value.toFixed(MOTOR_COMMAND_DIGITS[field]);
+}
+
 type JointLimits = {
   lower: number;      // position lower (rad)
   upper: number;      // position upper (rad)
@@ -288,22 +308,22 @@ const TimeSeriesPlot = React.memo(function TimeSeriesPlot({
 
 function makeInitialCommand(m: MotorState): MotorCommandFields {
   return {
-    position: (m.command_position ?? m.position).toFixed(3),
-    velocity: (m.command_velocity ?? m.velocity).toFixed(3),
-    torque: (m.command_torque ?? m.torque).toFixed(3),
+    position: formatCommandValue(m.command_position ?? m.position, "position", "0.00"),
+    velocity: formatCommandValue(m.command_velocity ?? m.velocity, "velocity", "0.00"),
+    torque: formatCommandValue(m.command_torque ?? m.torque, "torque", "0.00"),
     kp:
       m.command_kp !== undefined
-        ? m.command_kp.toFixed(3)
+        ? formatCommandValue(m.command_kp, "kp", "0.0")
         : m.kp !== undefined
-          ? m.kp.toFixed(3)
-          : "0.000",
+          ? formatCommandValue(m.kp, "kp", "0.0")
+          : "0.0",
     kd:
       m.command_kd !== undefined
-        ? m.command_kd.toFixed(3)
+        ? formatCommandValue(m.command_kd, "kd", "0.0")
         : m.kd !== undefined
-          ? m.kd.toFixed(3)
-          : "0.000",
-    durationMs: "1.000",
+          ? formatCommandValue(m.kd, "kd", "0.0")
+          : "0.0",
+    durationMs: "1.0",
   };
 }
 
@@ -378,21 +398,48 @@ interface MotorStatusRowProps {
 
 const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData }: MotorStatusRowProps) {
   const limits = motor.name ? JOINT_LIMITS[motor.name] : undefined;
-  const renderNum = (v: number, d = 3) => (hasData ? v.toFixed(d) : "N/A");
+  const renderNum = (v: number | undefined, d = 3) =>
+    hasData && typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "N/A";
+  const currentKp = motor.driver_command_kp;
+  const currentKd = motor.driver_command_kd;
+  const renderCommandPair = (
+    currentValue: number | undefined,
+    commandValue: number | undefined,
+    barRange?: { min: number; max: number; color: string },
+    digits = 2,
+  ) => (
+    <td className="num stat-cell">
+      <div className="status-pair-inline">
+        <span className="status-pair-cmd">{renderNum(commandValue, digits)}</span>
+        <span className="status-pair-now">{renderNum(currentValue, digits)}</span>
+      </div>
+      {limits && hasData && barRange && typeof currentValue === "number" && (
+        <StatBar value={currentValue} min={barRange.min} max={barRange.max} color={barRange.color} />
+      )}
+    </td>
+  );
   return (
     <tr className={hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}>
       <td className="cell-id">{motor.id}</td>
       <td className="cell-name">{motor.name ?? "-"}</td>
       <td className="cell-mode">{hasData ? motor.mode : "N/A"}</td>
-      <td className="num stat-cell">
-        <span className="stat-val">{renderNum(motor.position)}</span>
-        {limits && hasData && <StatBar value={motor.position} min={limits.lower} max={limits.upper} color="#3b82f6" />}
-      </td>
-      <td className="num">{renderNum(motor.velocity)}</td>
-      <td className="num stat-cell">
-        <span className="stat-val">{renderNum(motor.torque)}</span>
-        {limits && hasData && <StatBar value={motor.torque} min={-limits.effortMax} max={limits.effortMax} color="#f59e0b" />}
-      </td>
+      {renderCommandPair(motor.position, motor.driver_command_position, limits ? {
+        min: limits.lower,
+        max: limits.upper,
+        color: "#3b82f6",
+      } : undefined)}
+      {renderCommandPair(motor.velocity, motor.driver_command_velocity, limits ? {
+        min: -limits.velMax,
+        max: limits.velMax,
+        color: "#8b5cf6",
+      } : undefined)}
+      {renderCommandPair(motor.torque, motor.driver_command_torque, limits ? {
+        min: -limits.effortMax,
+        max: limits.effortMax,
+        color: "#f59e0b",
+      } : undefined, 2)}
+      <td className="num">{renderNum(currentKp, 1)}</td>
+      <td className="num">{renderNum(currentKd, 1)}</td>
       <td className="num">{hasData ? `${motor.temperature.toFixed(1)}°C` : "N/A"}</td>
     </tr>
   );
@@ -482,7 +529,7 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           onChange={handleFieldChange("position")}
           disabled={!powered || !canControl}
         />
-        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !powered || !canControl)}
+        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !powered || !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
@@ -491,7 +538,7 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           onChange={handleFieldChange("velocity")}
           disabled={!powered || !canControl}
         />
-        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !powered || !canControl)}
+        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !powered || !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
@@ -500,7 +547,7 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           onChange={handleFieldChange("torque")}
           disabled={!powered || !canControl}
         />
-        {limits && renderCmdBar("torque", cmd.torque, -limits.effortMax, limits.effortMax, "#f59e0b", !powered || !canControl)}
+        {limits && renderCmdBar("torque", cmd.torque, -limits.effortMax, limits.effortMax, "#f59e0b", !powered || !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
@@ -563,6 +610,7 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
 function App() {
   const [wsPassword, setWsPassword] = React.useState(getInitialWsPassword);
   const [authPasswordInput, setAuthPasswordInput] = React.useState(getInitialWsPassword);
+  const [navOpen, setNavOpen] = React.useState(false);
   const {
     connected,
     state,
@@ -830,21 +878,21 @@ function App() {
         ...prev,
         [motor.id]: {
           ...(prev[motor.id] ?? makeInitialCommand(motor)),
-          position: (motor.command_position ?? motor.position).toFixed(3),
-          velocity: (motor.command_velocity ?? motor.velocity).toFixed(3),
-          torque: (motor.command_torque ?? motor.torque).toFixed(3),
+          position: formatCommandValue(motor.command_position ?? motor.position, "position", prev[motor.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(motor.command_velocity ?? motor.velocity, "velocity", prev[motor.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(motor.command_torque ?? motor.torque, "torque", prev[motor.id]?.torque ?? "0.00"),
           kp:
             motor.command_kp !== undefined
-              ? motor.command_kp.toFixed(3)
+              ? formatCommandValue(motor.command_kp, "kp", prev[motor.id]?.kp ?? "0.0")
               : motor.kp !== undefined
-                ? motor.kp.toFixed(3)
-                : (prev[motor.id]?.kp ?? "0.000"),
+                ? formatCommandValue(motor.kp, "kp", prev[motor.id]?.kp ?? "0.0")
+                : (prev[motor.id]?.kp ?? "0.0"),
           kd:
             motor.command_kd !== undefined
-              ? motor.command_kd.toFixed(3)
+              ? formatCommandValue(motor.command_kd, "kd", prev[motor.id]?.kd ?? "0.0")
               : motor.kd !== undefined
-                ? motor.kd.toFixed(3)
-                : (prev[motor.id]?.kd ?? "0.000"),
+                ? formatCommandValue(motor.kd, "kd", prev[motor.id]?.kd ?? "0.0")
+                : (prev[motor.id]?.kd ?? "0.0"),
         },
       }));
     },
@@ -945,21 +993,21 @@ function App() {
       for (const m of state.motors) {
         next[m.id] = {
           ...(next[m.id] ?? makeInitialCommand(m)),
-          position: (m.command_position ?? m.position).toFixed(3),
-          velocity: (m.command_velocity ?? m.velocity).toFixed(3),
-          torque: (m.command_torque ?? m.torque).toFixed(3),
+          position: formatCommandValue(m.command_position ?? m.position, "position", next[m.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(m.command_velocity ?? m.velocity, "velocity", next[m.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(m.command_torque ?? m.torque, "torque", next[m.id]?.torque ?? "0.00"),
           kp:
             m.command_kp !== undefined
-              ? m.command_kp.toFixed(3)
+              ? formatCommandValue(m.command_kp, "kp", next[m.id]?.kp ?? "0.0")
               : m.kp !== undefined
-                ? m.kp.toFixed(3)
-              : (next[m.id]?.kp ?? "0.000"),
+                ? formatCommandValue(m.kp, "kp", next[m.id]?.kp ?? "0.0")
+              : (next[m.id]?.kp ?? "0.0"),
           kd:
             m.command_kd !== undefined
-              ? m.command_kd.toFixed(3)
+              ? formatCommandValue(m.command_kd, "kd", next[m.id]?.kd ?? "0.0")
               : m.kd !== undefined
-                ? m.kd.toFixed(3)
-              : (next[m.id]?.kd ?? "0.000"),
+                ? formatCommandValue(m.kd, "kd", next[m.id]?.kd ?? "0.0")
+              : (next[m.id]?.kd ?? "0.0"),
         };
       }
       return next;
@@ -1055,21 +1103,21 @@ function App() {
       for (const motor of state.motors) {
         next[motor.id] = {
           ...(next[motor.id] ?? makeInitialCommand(motor)),
-          position: (motor.command_position ?? motor.position).toFixed(3),
-          velocity: (motor.command_velocity ?? motor.velocity).toFixed(3),
-          torque: (motor.command_torque ?? motor.torque).toFixed(3),
+          position: formatCommandValue(motor.command_position ?? motor.position, "position", next[motor.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(motor.command_velocity ?? motor.velocity, "velocity", next[motor.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(motor.command_torque ?? motor.torque, "torque", next[motor.id]?.torque ?? "0.00"),
           kp:
             motor.command_kp !== undefined
-              ? motor.command_kp.toFixed(3)
+              ? formatCommandValue(motor.command_kp, "kp", next[motor.id]?.kp ?? "0.0")
               : motor.kp !== undefined
-                ? motor.kp.toFixed(3)
-                : (next[motor.id]?.kp ?? "0.000"),
+                ? formatCommandValue(motor.kp, "kp", next[motor.id]?.kp ?? "0.0")
+                : (next[motor.id]?.kp ?? "0.0"),
           kd:
             motor.command_kd !== undefined
-              ? motor.command_kd.toFixed(3)
+              ? formatCommandValue(motor.command_kd, "kd", next[motor.id]?.kd ?? "0.0")
               : motor.kd !== undefined
-                ? motor.kd.toFixed(3)
-                : (next[motor.id]?.kd ?? "0.000"),
+                ? formatCommandValue(motor.kd, "kd", next[motor.id]?.kd ?? "0.0")
+                : (next[motor.id]?.kd ?? "0.0"),
         };
       }
       return next;
@@ -1238,6 +1286,23 @@ function App() {
   const canInputPassword = authStatus === "required" || authStatus === "failed";
   const canSubmitPassword = canInputPassword && retryRemainingMs <= 0 && authPasswordInput.trim().length > 0;
 
+  React.useEffect(() => {
+    if (!navOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNavOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [navOpen]);
+
   const handleAuthRetry = (event?: React.FormEvent) => {
     event?.preventDefault();
 
@@ -1308,6 +1373,13 @@ function App() {
     <div className="app-shell">
       <div className="top-mode-bar">
         <div className="top-mode-content">
+          <button
+            className="btn btn-secondary btn-xs nav-menu-btn"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open navigator"
+          >
+            Menu
+          </button>
           <span className="toolbar-label">로봇 모드:</span>
           <div className="mode-actions">
             {ROBOT_MODES.map((mode) => (
@@ -1346,40 +1418,49 @@ function App() {
       </div>
 
       <div className="app">
-        {/* 왼쪽: 네비게이터 */}
-        <div className="nav-panel">
-          {/* 3D 로봇 뷰 - 상단에 표시 (토글 가능) */}
-          <div className="nav-robot-header">
-            <span className="nav-robot-title">3D 뷰어</span>
-            <button
-              className="btn btn-secondary btn-xs"
-              onClick={() => setShowUrdf((v) => !v)}
-            >
-              {showUrdf ? "숨기기" : "보이기"}
-            </button>
-          </div>
-          {showUrdf && (
-            <div className="nav-robot-viewer">
-              <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
-                <RobotScene jointState={urdfJointState} imuState={state?.imu} />
-              </Suspense>
-            </div>
-          )}
+        {navOpen && (
+          <div className="nav-overlay" onClick={() => setNavOpen(false)}>
+            <div className="nav-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="nav-robot-header">
+                <span className="nav-robot-title">3D 뷰어</span>
+                <div className="nav-robot-actions">
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => setShowUrdf((v) => !v)}
+                  >
+                    {showUrdf ? "숨기기" : "보이기"}
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => setNavOpen(false)}
+                  >
+                    닫기
+                  </button>
+                </div>
+              </div>
+              {showUrdf && (
+                <div className="nav-robot-viewer">
+                  <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
+                    <RobotScene jointState={urdfJointState} imuState={state?.imu} />
+                  </Suspense>
+                </div>
+              )}
 
-          {/* 네비게이터 제목 및 탭 */}
-          <div className="nav-content">
-            <h3>Navigator</h3>
-            <p className="nav-desc">
-              나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
-            </p>
-            <ul className="nav-list">
-              <li className="nav-item active">모터 &amp; IMU 모니터</li>
-              <li className="nav-item">로그 뷰어 (예정)</li>
-              <li className="nav-item">설정 / 튜닝 (예정)</li>
-              <li className="nav-item">디버그 패널 (예정)</li>
-            </ul>
+              <div className="nav-content">
+                <h3>Navigator</h3>
+                <p className="nav-desc">
+                  나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
+                </p>
+                <ul className="nav-list">
+                  <li className="nav-item active">모터 &amp; IMU 모니터</li>
+                  <li className="nav-item">로그 뷰어 (예정)</li>
+                  <li className="nav-item">설정 / 튜닝 (예정)</li>
+                  <li className="nav-item">디버그 패널 (예정)</li>
+                </ul>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* 오른쪽: 메인 모니터 */}
         <div className="main-panel">
@@ -1427,35 +1508,42 @@ function App() {
               {/* 왼쪽: 상태 테이블 */}
               <div className="card motors-status-card">
                 <div className="card-header">
-                  <h3>Motor Status</h3>
+                  <div className="card-header-split">
+                    <h3>Motor Status</h3>
+                    <span className="status-legend">
+                      <span className="status-legend-cmd">L: Cmd</span>
+                      <span className="status-legend-now">R: Now</span>
+                    </span>
+                  </div>
                 </div>
                 <div className="table-wrapper">
                   <table className="data-table status-table">
                     <colgroup>
-                      <col style={{ width: "32px" }} />
-                      <col style={{ width: "90px" }} />
-                      <col style={{ width: "50px" }} />
-                      <col style={{ width: "74px" }} />
-                      <col style={{ width: "60px" }} />
-                      <col style={{ width: "68px" }} />
-                      <col style={{ width: "52px" }} />
+                      <col style={{ width: "28px" }} />
+                      <col style={{ width: "88px" }} />
+                      <col style={{ width: "62px" }} />
+                      <col style={{ width: "72px" }} />
+                      <col style={{ width: "72px" }} />
+                      <col style={{ width: "72px" }} />
+                      <col style={{ width: "36px" }} />
+                      <col style={{ width: "36px" }} />
+                      <col style={{ width: "46px" }} />
                     </colgroup>
                     <thead>
                       <tr>
-                        <th rowSpan={2} className="head-id">ID</th>
-                        <th rowSpan={2} className="head-name">Name</th>
-                        <th rowSpan={2} className="head-mode">Mode</th>
-                        <th colSpan={4} className="head-group">현재 상태</th>
-                      </tr>
-                      <tr>
-                        <th className="num">Pos</th>
-                        <th className="num">Vel</th>
-                        <th className="num">Torque</th>
+                        <th className="head-id">ID</th>
+                        <th className="head-name">Name</th>
+                        <th className="head-mode">Mode</th>
+                        <th className="head-pair">Pos</th>
+                        <th className="head-pair">Vel</th>
+                        <th className="head-pair">Torque</th>
+                        <th className="num">Kp</th>
+                        <th className="num">Kd</th>
                         <th className="num">Temp</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="bulk-spacer-row"><td colSpan={7} /></tr>
+                      <tr className="bulk-spacer-row"><td colSpan={9} /></tr>
                       {displayMotors.map((m) => (
                         <MotorStatusRow key={m.id} motor={m} hasData={hasStateData} />
                       ))}
@@ -1472,19 +1560,19 @@ function App() {
                 <div className="table-wrapper">
                   <table className="data-table control-table">
                     <colgroup>
-                      <col style={{ width: "24px" }} />
-                      <col style={{ width: "30px" }} />
-                      <col style={{ width: "68px" }} />
-                      <col style={{ width: "62px" }} />
-                      <col style={{ width: "65px" }} />
-                      <col style={{ width: "58px" }} />
-                      <col style={{ width: "58px" }} />
-                      <col style={{ width: "58px" }} />
-                      <col style={{ width: "150px" }} />
+                      <col style={{ width: "18px" }} />
+                      <col style={{ width: "22px" }} />
+                      <col style={{ width: "46px" }} />
+                      <col style={{ width: "46px" }} />
+                      <col style={{ width: "50px" }} />
+                      <col style={{ width: "46px" }} />
+                      <col style={{ width: "42px" }} />
+                      <col style={{ width: "46px" }} />
+                      <col style={{ width: "122px" }} />
                     </colgroup>
                     <thead>
                       <tr>
-                        <th rowSpan={2} className="head-check">
+                        <th className="head-check">
                           <input
                             type="checkbox"
                             checked={
@@ -1501,17 +1589,14 @@ function App() {
                             onChange={handleToggleSelectAll}
                           />
                         </th>
-                        <th rowSpan={2} className="head-id">ID</th>
-                        <th colSpan={6} className="head-group">명령</th>
-                        <th rowSpan={2} className="head-control">Control</th>
-                      </tr>
-                      <tr>
+                        <th className="head-id">ID</th>
                         <th className="num">Pos</th>
                         <th className="num">Vel</th>
                         <th className="num">Torque</th>
                         <th className="num">Kp</th>
                         <th className="num">Kd</th>
                         <th className="num">시간(s)</th>
+                        <th className="head-control">Control</th>
                       </tr>
                     </thead>
                     <tbody>

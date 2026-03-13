@@ -1,56 +1,460 @@
-# robot-control 
+# Robot Project Collaboration Guide
 
+이 문서는 `/home/pms/robot_control` 워크스페이스의 현재 코드 기준 협업 가이드다.
+프로젝트는 크게 두 파트로 나뉜다.
 
-# robot-control 의 의존성 설치 및 빌드
-# libbyaml-cpp
+- `robot-control`: 실시간 제어, 시뮬레이션, 안전계층, WebSocket 브리지
+- `robot-monitor`: 브라우저 기반 모니터링/제어 UI
+
+아래 내용은 협업자가 "어디를 고치면 어떤 동작이 바뀌는지" 빠르게 이해하도록 정리했다.
+
+## 1. 저장소 구조
+
+```text
+/home/pms/robot_control
+├── robot-control/        # C++ 제어 프로그램
+│   ├── robot_control.cpp # 실기 제어 엔트리
+│   ├── robot_simul.cpp   # MuJoCo 시뮬레이터 엔트리
+│   ├── tasks/            # RT / Non-RT task 구현
+│   ├── config/           # 런타임 파라미터(yaml)
+│   ├── policy/           # TorchScript 정책 파일
+│   ├── mjcf/             # MuJoCo 모델/메시
+│   └── external/         # RTFW, uWebSockets 등 외부 코드
+├── robot-monitor/        # React + Vite UI
+└── guide                 # 현재 문서
+```
+
+## 2. 전체 아키텍처
+
+### 2.1 런타임 구성
+
+`robot-control`은 `rtfw::RealTimeFramework` 위에서 task를 등록하는 구조다.
+
+- 실기 실행 바이너리: `robot-control/build/robot_control`
+- 시뮬레이션 실행 바이너리: `robot-control/build/robot_simul`
+- UI 접속 포트: WebSocket `8080`
+- UI 앱: Vite 빌드 결과를 정적 서빙
+
+### 2.2 핵심 데이터 흐름
+
+실기:
+
+1. `CanBus0`, `CanBus1`가 실제 모터 상태를 읽어 `*/state` 토픽으로 발행
+2. `Manager`가 조이스틱/GUI 요청/센서 상태를 바탕으로 로봇 모드와 수동 명령 생성
+3. `PolicyRunner`가 RL 정책 추론 후 `*/action` 발행
+4. `SafetyLayer`가 `Manager` 명령 또는 `PolicyRunner` 명령을 선택/검증해서 최종 `*/cmd` 발행
+5. `CanBus0`, `CanBus1`가 최종 명령을 모터에 전송
+6. `WsBridgeTask`가 상태를 WebSocket으로 내보내고 GUI 요청을 내부 토픽으로 변환
+
+시뮬레이션:
+
+1. `MujocoEnv`가 `SafetyLayer`의 최종 `*/cmd`를 받아 MuJoCo에 적용
+2. MuJoCo에서 계산한 관절/IMU 상태를 `*/state`, `imu_data`로 발행
+3. 나머지 상위 계층(`Manager`, `PolicyRunner`, `SafetyLayer`, `WsBridgeTask`)은 실기와 거의 같은 방식으로 동작
+
+## 3. robot-control 상세
+
+### 3.1 엔트리 포인트
+
+#### `robot-control/robot_control.cpp`
+
+실기 제어용 메인 프로그램.
+
+- 시작 직후 `mlockall()` 시도로 soft real-time 환경 구성
+- RT task 등록
+  - `Manager` 30Hz
+  - `PolicyRunner` 200Hz
+  - `SafetyLayer` 200Hz
+  - `CanBus0` 200Hz, core 6
+  - `CanBus1` 200Hz, core 7
+- Non-RT task 등록
+  - `Joystick` 30Hz
+  - `WsBridgeTask` 30Hz
+- 설정 파일: `config/robotnl.yaml`
+
+#### `robot-control/robot_simul.cpp`
+
+MuJoCo 시뮬레이션용 메인 프로그램.
+
+- `/tmp/robot_simul.lock` 파일 락으로 단일 인스턴스만 허용
+- RT task 등록
+  - `Manager` 30Hz
+  - `PolicyRunner` 200Hz
+  - `SafetyLayer` 200Hz
+  - `MujocoEnv` 200Hz
+- Non-RT task 등록
+  - `Joystick` 30Hz
+  - `WsBridgeTask` 30Hz
+
+### 3.2 주요 Task 역할
+
+#### `Manager`
+
+파일: `robot-control/tasks/manager.hpp`
+
+역할:
+
+- 시스템 상태 머신 관리
+- 조이스틱 입력 수집 후 `cmd_vel` 생성
+- GUI 제어 요청 승인/해제 흐름 관리
+- GUI 직접 모터 명령을 내부 수동 명령으로 변환
+- 로봇 운용 모드 결정
+
+주요 상태:
+
+- `IDLE`
+- `MANU`
+- `READY`
+- `RL_WALK`
+
+주요 책임:
+
+- `A` 버튼으로 `READY -> RL_WALK` 진입 요청
+- `B` 버튼으로 RL 종료 요청
+- GUI mode request 처리
+- GUI control request 처리
+- 현재 모드를 `gui/robot/mode_current`로 알림
+- 현재 safety level을 `manager/safety_level`로 알림
+
+#### `PolicyRunner`
+
+파일:
+
+- `robot-control/tasks/policy_runner.hpp`
+- `robot-control/tasks/policy_runner.cpp`
+
+역할:
+
+- TorchScript 정책 파일 로드
+- IMU, 모터 상태, 속도 명령 기반 observation 구성
+- RL action 계산
+- 각 관절의 목표 자세/게인을 `*/action`으로 발행
+
+특징:
+
+- 기본 정책: `policy/policy47_7.pt`
+- 정지 정책: `policy/policy_stand3.pt`
+- command norm이 작으면 stand policy 사용
+- 추론은 내부 카운터 기준으로 5주기마다 1회 수행
+- LibTorch 스레드를 1개로 고정해 작은 MLP 추론 오버헤드 감소
+
+Observation 구성 요소:
+
+- phase sin/cos
+- base angular velocity
+- gravity projection
+- command velocity
+- joint position offset
+- joint velocity
+- previous action
+
+#### `SafetyLayer`
+
+파일: `robot-control/tasks/safety_layer.hpp`
+
+역할:
+
+- 수동 명령과 RL 명령 중 현재 모드에 맞는 명령 선택
+- 모터/IMU/명령 타임아웃 감시
+- 관절 위치, 속도, 토크, 온도, IMU 기울기 등 보호
+- 이상 시 `LOCK` 모드로 강제 전환
+- reset 시 `RESTORE -> MANUAL` 복귀
+
+모드:
+
+- `MANUAL`
+- `RL`
+- `LOCK`
+- `RESTORE`
+
+최종 출력:
+
+- 각 관절 `*/cmd`
+- 안전 잠금 상태 `safety/lock_state`
+
+#### `CanBus0`, `CanBus1`
+
+파일:
+
+- `robot-control/tasks/driver/can_bus0.h`
+- `robot-control/tasks/driver/can_bus1.h`
+
+역할:
+
+- 실제 CAN 장치와 통신
+- 왼쪽 6축, 오른쪽 6축 분리
+- 모터 feedback 수신 후 `*/state` 발행
+- `SafetyLayer` 최종 명령 수신 후 모터에 전달
+- 실제로 전송된 명령을 `*/cmd_applied`로 발행
+
+주의:
+
+- 포트 이름은 `config/robotnl.yaml`의 `can0.port`, `can1.port` 사용
+- 현재 설정은 `can1`, `can2`
+- 연결 끊김, bus-off, 전체 모터 오프라인 상황을 자체 복구 시도
+
+#### `MujocoEnv`
+
+파일: `robot-control/tasks/mujoco_env.hpp`
+
+역할:
+
+- MuJoCo 모델 로드
+- 최종 관절 명령을 PD + FF 형태로 시뮬레이터에 적용
+- 시뮬레이션 결과를 모터 상태/IMU처럼 다시 발행
+- 별도 GLFW viewer 스레드로 시각화
+
+핵심 파라미터:
+
+- `control_dt`
+- `policy_dt`
+- `physics_dt`
+- `cutoff_freq`
+- `default_joint_positions`
+- `effort_limits`
+
+#### `Joystick`
+
+파일: `robot-control/tasks/joystick.h`
+
+역할:
+
+- `/dev/input/js0` 읽기
+- 아날로그 축과 버튼 상태를 내부 토픽으로 발행
+
+비고:
+
+- 연결 안 되어도 주기적으로 재시도
+- Non-blocking read 사용
+
+#### `WsBridgeTask`
+
+파일: `robot-control/tasks/ws_server/ws_bridge_task.hpp`
+
+역할:
+
+- 내부 상태를 UI용 snapshot으로 수집
+- WebSocket 서버 구동
+- UI 이벤트를 내부 토픽으로 변환
+
+UI에서 들어오는 이벤트:
+
+- `subscribe_state`
+- `auth`
+- `motor_control_request`
+- `motor_power`
+- `motor_command`
+- `robot_mode_request`
+- `safety_reset`
+
+내부로 쓰는 주요 토픽:
+
+- `gui/motor/control_request`
+- `gui/<joint>/cmd`
+- `gui/<joint>/on`
+- `gui/robot/mode_request`
+- `manager/reset_signal`
+
+### 3.3 설정 파일
+
+파일: `robot-control/config/robotnl.yaml`
+
+주요 설정:
+
+- 정책 파일 경로
+- joint list
+- kp/kd
+- effort limit
+- 기본자세
+- zero/reset 자세
+- base position
+- WebSocket 제어 비밀번호
+- safety limit
+- CAN 포트 이름
+
+현재 확인된 값 중 협업 시 자주 보는 항목:
+
+- `gui/control_password: 1234`
+- `policy_checkpoint_path: policy/policy47_7.pt`
+- `policy_stand_path: policy/policy_stand3.pt`
+
+### 3.4 빌드 의존성
+
+`robot-control/CMakeLists.txt` 기준 필수 의존성:
+
+- CMake 3.16+
+- Eigen3
+- GLFW3
+- LibTorch
+- MuJoCo 3.2.0
+- nlohmann_json
+
+외부 프레임워크:
+
+- `external/librtfw`
+- `external/uWebSockets`
+- `external/uSockets`
+
+## 4. robot-monitor 상세
+
+### 4.1 기술 스택
+
+파일: `robot-monitor/package.json`
+
+- React 19
+- TypeScript
+- Vite
+- `@react-three/fiber`
+- `@react-three/drei`
+- `three`
+- `urdf-loader`
+
+### 4.2 주요 구성
+
+#### `src/App.tsx`
+
+UI 메인 화면.
+
+주요 기능:
+
+- WebSocket 연결/인증 처리
+- 모터 상태 테이블
+- 모터 명령 테이블
+- 개별/다중 선택 모터 명령 전송
+- 전체 On/Off, Sync, Send
+- 로봇 모드 전환 버튼
+- Safety reset 버튼
+- IMU 표시
+- 시계열 플롯
+- URDF 3D 뷰어
+
+#### `src/hooks/useRobotWs.ts`
+
+WebSocket 클라이언트 훅.
+
+역할:
+
+- 서버 연결
+- 자동 재연결
+- 인증 처리
+- 상태 메시지 수신
+- UI 액션 메시지 송신 함수 제공
+
+노출 함수:
+
+- `sendMotorPower`
+- `sendMotorCommand`
+- `sendMotorControlRequest`
+- `sendRobotModeRequest`
+- `sendSafetyReset`
+- `retryAuth`
+
+연결 주소:
+
+- 기본값: `ws://<현재 호스트>:8080`
+- 환경변수 오버라이드: `VITE_WS_URL`
+
+#### `src/components/RobotScene.tsx`
+
+- Three.js canvas 구성
+- Global / Local frame 토글
+- URDF 로봇 로딩 위임
+
+#### `src/components/UrdfRobot.tsx`
+
+- URDF 로드
+- `joint_states`에 따라 각 joint 값 반영
+- IMU 자세를 global rotation으로 반영
+
+### 4.3 UI와 백엔드 데이터 계약
+
+백엔드 state payload 주요 필드:
+
+- `control.requested`
+- `control.granted`
+- `robot_mode.current`
+- `safety.level`
+- `safety.locked`
+- `motors[]`
+- `imu`
+- `joint_states`
+
+모터 1개당 대표 필드:
+
+- `position`
+- `velocity`
+- `torque`
+- `temperature`
+- `command_position`
+- `command_velocity`
+- `command_torque`
+- `command_kp`
+- `command_kd`
+- `driver_command_*`
+- `enabled`
+
+## 5. 실행 방법
+
+### 5.1 robot-control 의존성 설치 및 빌드
+
+```bash
 sudo apt install libyaml-cpp-dev
 sudo apt install libglfw3-dev
 sudo apt install libeigen3-dev
+```
 
-# mujoco 3.2.0
+MuJoCo 3.2.0 설치 예시:
+
+```bash
 wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-x86_64.tar.gz
 tar xf mujoco-3.2.0-linux-x86_64.tar.gz
-mkdir ~/.mujoco
+mkdir -p ~/.mujoco
 mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
-# mujoco 3.2.0 (aarch64)
+```
+
+aarch64 예시:
+
+```bash
 wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-aarch64.tar.gz
 tar xf mujoco-3.2.0-linux-aarch64.tar.gz
-mkdir ~/.mujoco
+mkdir -p ~/.mujoco
 mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
+```
 
+LibTorch 설치 예시:
 
-
-# libtorch-dev
+```bash
 wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-2.10.0%2Bcpu.zip
 unzip libtorch-shared-with-deps-2.10.0+cpu.zip
 sudo mv libtorch /opt/libtorch
-# build from source 
+```
+
+`aarch64`에서는 배포 바이너리 대신 소스에서 직접 LibTorch를 빌드해야 할 수 있다.
+예시 절차:
+
+```bash
 sudo apt update
 sudo apt install -y \
-    git cmake ninja-build build-essential \
-    libopenblas-dev libomp-dev \
-    python3 python3-pip
-    
+  git cmake ninja-build build-essential \
+  libopenblas-dev libomp-dev \
+  python3 python3-pip
+
 cd ~
 git clone --recursive https://github.com/pytorch/pytorch.git
 cd pytorch
-
-# 안정 버전 하나 골라서 (예: v2.2.0)
 git checkout v2.2.0
 git submodule sync
 git submodule update --init --recursive
 
-cd ~/pytorch
-mkdir build_libtorch
+mkdir -p build_libtorch
 cd build_libtorch
-# 환경 변수로도 한 번 막아주고
+
 export USE_CUDA=0
 export BUILD_TEST=0
 export USE_MKLDNN=1
 export USE_DISTRIBUTED=0
 export BUILD_PYTHON=0
 
-# 실제 CMake 설정
 cmake .. \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
@@ -61,52 +465,143 @@ cmake .. \
   -DUSE_XNNPACK=ON \
   -DUSE_DISTRIBUTED=OFF \
   -DCMAKE_INSTALL_PREFIX=/opt/libtorch
-#   -DCMAKE_INSTALL_PREFIX=$HOME/libtorch_cpu
+
 cmake --build . --target install -- -j$(nproc)
+```
 
+빌드가 끝나면 `/opt/libtorch`를 `robot-control/CMakeLists.txt`의 `Torch_DIR` 경로와 맞춰 사용하면 된다.
 
+`manif` 설치 예시:
 
-
-#manif
+```bash
 git clone https://github.com/artivis/manif.git
-cd manif && mkdir build && cd build
-cmake ..
-sudo make install
-
-
-cd robot-control
+cd manif
 mkdir build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..    # 시간이 좀 걸림
+cmake ..
+sudo make install
+```
+
+빌드:
+
+```bash
+cd /home/pms/robot_control/robot-control
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
 cmake --build . -- -j$(nproc)
-# ./build/robot_control   # 실행 예시
-# or
-# ./build/robot_simul    # 시뮬레이터 실행 예시
+```
 
+실행 예시:
 
+```bash
+cd /home/pms/robot_control/robot-control
+./build/robot_control
+```
 
+```bash
+cd /home/pms/robot_control/robot-control
+./build/robot_simul
+```
 
-#robot-monitor 배포 및 systemd 서비스 설정
+### 5.2 robot-monitor 실행
 
-#npm 구성
+Node 설치 예시:
+
+```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-# 터미널 재시작
 nvm install 22
 nvm use 22
-node -v
-npm -v
+```
 
-# robot-monitor 빌드 및 실행
-cd robot-monitor   # 예시 경로
-npm install               # 한 번만
-npm run build             # dist/ 생성
-npx serve dist        # dist/ 폴더를 웹서버로 띄움 (기본 포트: 3000)
-# http://localhost:3000 접속하여 웹 UI 확인
+개발 서버:
 
+```bash
+cd /home/pms/robot_control/robot-monitor
+npm install
+npm run dev
+```
 
-# systemd 서비스 파일 예시 (robot-monitor.service)
+배포 빌드:
 
-sudo nano /etc/systemd/system/robot-monitor.service
+```bash
+cd /home/pms/robot_control/robot-monitor
+npm run build
+npx serve dist
+```
+
+환경변수 예시:
+
+```bash
+VITE_WS_URL=ws://127.0.0.1:8080 npm run dev
+```
+
+## 6. 협업 포인트
+
+### 6.1 기능 변경 시 주로 수정할 파일
+
+로봇 상태 머신/운용 로직:
+
+- `robot-control/tasks/manager.hpp`
+
+RL 정책/observation/action:
+
+- `robot-control/tasks/policy_runner.hpp`
+- `robot-control/tasks/policy_runner.cpp`
+- `robot-control/config/robotnl.yaml`
+
+안전 로직:
+
+- `robot-control/tasks/safety_layer.hpp`
+- `robot-control/config/robotnl.yaml`
+
+실기 드라이버:
+
+- `robot-control/tasks/driver/can_bus0.h`
+- `robot-control/tasks/driver/can_bus1.h`
+
+시뮬레이터:
+
+- `robot-control/tasks/mujoco_env.hpp`
+- `robot-control/mjcf/robot_nl.xml`
+
+WebSocket 메시지 포맷:
+
+- `robot-control/tasks/ws_server/ws_bridge.hpp`
+- `robot-control/tasks/ws_server/ws_bridge_task.hpp`
+- `robot-monitor/src/types.ts`
+- `robot-monitor/src/hooks/useRobotWs.ts`
+
+UI 화면/동작:
+
+- `robot-monitor/src/App.tsx`
+- `robot-monitor/src/components/RobotScene.tsx`
+- `robot-monitor/src/components/UrdfRobot.tsx`
+
+### 6.2 변경 시 주의할 일
+
+- 백엔드 메시지 필드를 바꾸면 UI 타입 정의도 같이 수정해야 한다.
+- joint 이름 순서를 바꾸면 `PolicyRunner`, `MujocoEnv`, UI joint mapping이 동시에 영향받는다.
+- safety limit 변경은 실기와 시뮬레이터 모두에서 검증해야 한다.
+- `robot-control/build/`는 빌드 산출물 디렉터리라 협업 변경 대상으로 보지 않는 편이 안전하다.
+
+## 7. 현재 코드 기준 확인된 메모
+
+- `robot-monitor`의 WebSocket 인증 UI는 존재한다.
+- 백엔드 기본 비밀번호는 현재 `1234`로 설정되어 있다.
+- `WsBridgeTask::build_snapshot()`의 `joint_states`는 현재 실제 모터 위치 대신 전부 `0`으로 채워져 있다.
+  - 따라서 UI의 URDF 자세는 현재 실시간 관절 상태를 정확히 반영하지 않는다.
+- 루트 워크스페이스에는 추적되지 않은 파일이 있다.
+  - `.vscode/`
+  - `robot-control/build/`
+  - `robot-monitor/src/components/RobotScene.tsx.txt`
+  - `robot-monitor/src/components/UrdfRobot.tsx.txt`
+
+## 8. systemd 예시
+
+`robot-monitor` 서비스 예시:
+
+```ini
 [Unit]
 Description=Robot Web UI
 
@@ -117,8 +612,20 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
+```
 
+적용:
 
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable robot-monitor
 sudo systemctl start robot-monitor
+```
+
+## 9. 추천 협업 흐름
+
+1. 기능 요청이 들어오면 먼저 실기 경로인지 시뮬레이터 경로인지 구분한다.
+2. 관련 토픽/메시지 이름을 확인한다.
+3. `robotnl.yaml` 파라미터 영향 여부를 확인한다.
+4. UI와 백엔드 메시지 계약이 깨지지 않는지 같이 본다.
+5. 가능하면 `robot_simul` + `robot-monitor` 조합으로 먼저 검증한 뒤 실기에 적용한다.
