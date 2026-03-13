@@ -434,6 +434,37 @@ body {
   text-align: left;
 }
 
+.cell-mode {
+  text-align: center;
+}
+
+.motor-status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.motor-status-dot.dot-inactive {
+  background: #9ca3af;
+}
+
+.motor-status-dot.dot-ok {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+}
+
+.motor-status-dot.dot-error {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
+}
+
+.motor-status-dot.dot-warning {
+  background: #f59e0b;
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.6);
+}
+
 .data-table th.num,
 .data-table td.num {
   text-align: right;

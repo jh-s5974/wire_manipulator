@@ -422,7 +422,21 @@ const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData }: Mo
     <tr className={hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}>
       <td className="cell-id">{motor.id}</td>
       <td className="cell-name">{motor.name ?? "-"}</td>
-      <td className="cell-mode">{hasData ? motor.mode : "N/A"}</td>
+      <td className="cell-mode">
+        <span
+          className={
+            "motor-status-dot" +
+            (!hasData || motor.enabled === false
+              ? " dot-inactive"
+              : motor.error
+              ? " dot-error"
+              : motor.warning
+              ? " dot-warning"
+              : " dot-ok")
+          }
+          title={hasData ? motor.mode : "N/A"}
+        />
+      </td>
       {renderCommandPair(motor.position, motor.driver_command_position, limits ? {
         min: limits.lower,
         max: limits.upper,
@@ -1521,7 +1535,7 @@ function App() {
                     <colgroup>
                       <col style={{ width: "28px" }} />
                       <col style={{ width: "88px" }} />
-                      <col style={{ width: "62px" }} />
+                      <col style={{ width: "32px" }} />
                       <col style={{ width: "72px" }} />
                       <col style={{ width: "72px" }} />
                       <col style={{ width: "72px" }} />
@@ -1533,7 +1547,7 @@ function App() {
                       <tr>
                         <th className="head-id">ID</th>
                         <th className="head-name">Name</th>
-                        <th className="head-mode">Mode</th>
+                        <th className="head-mode">St</th>
                         <th className="head-pair">Pos</th>
                         <th className="head-pair">Vel</th>
                         <th className="head-pair">Torque</th>
