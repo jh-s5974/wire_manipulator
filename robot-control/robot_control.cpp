@@ -6,6 +6,7 @@
 #include "tasks/policy_runner.hpp"
 #include "tasks/safety_layer.hpp"
 #include "tasks/driver/can_bus0.h"
+#include "tasks/driver/can_bus1.h"
 #include "tasks/ws_server/ws_bridge_task.hpp"
 
 
@@ -83,6 +84,7 @@ int main(int argc, char** argv) {
 
     rtfw::FrameworkConfig config;
     config.mode = rtfw::Mode::LIVE;
+    config.realtime_level = RealtimeLevel::SOFT;
 
     // 2. C-style 인자 배열을 std::vector<std::string>으로 변환하여 사용하기 쉽게 만듭니다.
     std::vector<std::string> args(argv + 1, argv + argc);
@@ -103,7 +105,8 @@ int main(int argc, char** argv) {
         framework.registerTask(std::make_unique<task_pool::Manager>(), 30);
         framework.registerTask(std::make_unique<task_pool::PolicyRunner>(), 200);
         framework.registerTask(std::make_unique<task_pool::SafetyLayer>(), 200);
-        framework.registerTask(std::make_unique<task_pool::CanBus0>(), 200);
+        framework.registerTask(std::make_unique<task_pool::CanBus0>(), 200, 6);
+        framework.registerTask(std::make_unique<task_pool::CanBus1>(), 200, 7);
 
         // --- Non-RT 태스크 등록 ---
         framework.registerNonRtTask(std::make_unique<task_pool::Joystick>(), 30);

@@ -42,6 +42,12 @@ struct MotorSnapshot {
     double command_kp;
     double command_kd;
 
+    double driver_command_position;
+    double driver_command_velocity;
+    double driver_command_torque;
+    double driver_command_kp;
+    double driver_command_kd;
+
     double kp;
     double kd;
 
@@ -95,6 +101,11 @@ inline void to_json(json& j, const MotorSnapshot& m) {
         {"command_torque", m.command_torque},
         {"command_kp", m.command_kp},
         {"command_kd", m.command_kd},
+        {"driver_command_position", m.driver_command_position},
+        {"driver_command_velocity", m.driver_command_velocity},
+        {"driver_command_torque", m.driver_command_torque},
+        {"driver_command_kp", m.driver_command_kp},
+        {"driver_command_kd", m.driver_command_kd},
         {"kp", m.kp},
         {"kd", m.kd},
         {"enabled", m.enabled}

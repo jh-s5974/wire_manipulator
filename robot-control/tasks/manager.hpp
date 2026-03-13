@@ -150,6 +150,10 @@ namespace task_pool {
                 s.gui_mode_request_online = true;
             });
 
+            
+            auto& joint_kp = p_joint_kp.read();
+            auto& joint_kd = p_joint_kd.read();
+
             for (auto i=0; i<12; i++) {
                 dr_gui_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
                     s.gui_motor_cmd[i] = data;
@@ -167,8 +171,10 @@ namespace task_pool {
                         safe_cmd.pos = s.robot_state.motor[i].pos;
                         safe_cmd.vel = 0.0;
                         safe_cmd.torque = 0.0;
-                        safe_cmd.kp = 100.0;
-                        safe_cmd.kd = 30.0;
+                        // safe_cmd.kp = 0.0;
+                        safe_cmd.kp = joint_kp[i];
+                        // safe_cmd.kd = joint_kd[i];
+                        safe_cmd.kd = 3.0;
                         dw_mtr_cmd[i].write(safe_cmd);
                     }
                 });
@@ -351,6 +357,8 @@ namespace task_pool {
     Parameter<std::vector<std::string>> p_joint_names{"joints", std::vector<std::string>()};
     Parameter<std::vector<double>> p_default_joint_positions{"default_joint_positions"};
     Parameter<std::vector<double>> p_joint_zero_positions{"joint_zero_positions"};
+    Parameter<std::vector<double>> p_joint_kp{"joint_kp"};
+    Parameter<std::vector<double>> p_joint_kd{"joint_kd"};
     Parameter<double> joy_vx_scale{"joy.vx_scale", 1.0};
     Parameter<double> joy_vy_scale{"joy.vy_scale", 1.0};
     Parameter<double> joy_wz_scale{"joy.wz_scale", 1.0};
@@ -439,6 +447,8 @@ namespace task_pool {
             }
 
             auto& joint_target_positions = p_default_joint_positions.read();
+            auto& joint_kp = p_joint_kp.read();
+            auto& joint_kd = p_joint_kd.read();
 
             double duration_ms = 3000.0; // 3 seconds
             double ratio = (s.robot_state.tick_ms - start_tick) / duration_ms;
@@ -449,8 +459,8 @@ namespace task_pool {
                 mtr_cmd.pos = init_q[i] * (1-ratio) + joint_target_positions[i]*0.3 * ratio;
                 mtr_cmd.vel = 0.0;
                 mtr_cmd.torque = 0.0;
-                mtr_cmd.kp = 500.0;
-                mtr_cmd.kd = 50.0;
+                mtr_cmd.kp = joint_kp[i];
+                mtr_cmd.kd = joint_kd[i];
 
                 dw_mtr_cmd[i].write(mtr_cmd);
             }

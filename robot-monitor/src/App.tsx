@@ -46,18 +46,18 @@ type JointLimits = {
 // TODO: replace dummy velMax/kpMax/kdMax/durationMax with real values per joint
 const JOINT_LIMITS: Record<string, JointLimits> = {
   //                         pos range (rad)        torque  vel    kp    kd  dur
-  hip_yaw_left:      { lower: -0.698132, upper:  1.570796, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  hip_yaw_right:     { lower: -1.570796, upper:  0.698132, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  hip_roll_left:     { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  hip_roll_right:    { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  hip_pitch_left:    { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  hip_pitch_right:   { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  knee_left:         { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  knee_right:        { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
-  ankle_pitch_left:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
-  ankle_pitch_right: { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
-  ankle_roll_left:   { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
-  ankle_roll_right:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
+  hip_yaw_left:      { lower: -0.698132, upper:  1.570796, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  hip_yaw_right:     { lower: -1.570796, upper:  0.698132, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  hip_roll_left:     { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  hip_roll_right:    { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  hip_pitch_left:    { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  hip_pitch_right:   { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  knee_left:         { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  knee_right:        { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
+  ankle_pitch_left:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_pitch_right: { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_roll_left:   { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_roll_right:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
 };
 
 const PLACEHOLDER_MOTORS: MotorState[] = Array.from({ length: 12 }, (_, id) => ({
@@ -545,7 +545,11 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
             <input
               type="checkbox"
               checked={powered}
-              onChange={() => onTogglePower(motor.id)}
+              onChange={() => {}}
+              onClick={(e) => {
+                e.preventDefault();
+                onTogglePower(motor.id);
+              }}
               disabled={!canControl}
             />
             <span className="toggle-slider" />
@@ -599,6 +603,7 @@ function App() {
   // 일괄 입력 상태
   const [selectedMotorIds, setSelectedMotorIds] = React.useState<Set<number>>(new Set());
   const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
+  const [showUrdf, setShowUrdf] = React.useState(true);
   const [showPlot, setShowPlot] = React.useState(false);
   const [plotPaused, setPlotPaused] = React.useState(false);
   const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
@@ -1343,12 +1348,23 @@ function App() {
       <div className="app">
         {/* 왼쪽: 네비게이터 */}
         <div className="nav-panel">
-          {/* 3D 로봇 뷰 - 항상 상단에 표시 */}
-          <div className="nav-robot-viewer">
-            <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
-              <RobotScene jointState={urdfJointState} imuState={state?.imu} />
-            </Suspense>
+          {/* 3D 로봇 뷰 - 상단에 표시 (토글 가능) */}
+          <div className="nav-robot-header">
+            <span className="nav-robot-title">3D 뷰어</span>
+            <button
+              className="btn btn-secondary btn-xs"
+              onClick={() => setShowUrdf((v) => !v)}
+            >
+              {showUrdf ? "숨기기" : "보이기"}
+            </button>
           </div>
+          {showUrdf && (
+            <div className="nav-robot-viewer">
+              <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
+                <RobotScene jointState={urdfJointState} imuState={state?.imu} />
+              </Suspense>
+            </div>
+          )}
 
           {/* 네비게이터 제목 및 탭 */}
           <div className="nav-content">

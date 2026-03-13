@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.16)
 set(CMAKE_C_STANDARD 11)
 include(FetchContent)
 FetchContent_Declare(

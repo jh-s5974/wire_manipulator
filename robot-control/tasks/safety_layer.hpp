@@ -220,9 +220,12 @@ private:
     Parameter<double> p_state_timeout_sec{"safety_layer.state_timeout_sec", 1.0};
     Parameter<double> p_imu_timeout_sec{"safety_layer.imu_timeout_sec", 1.0};
 
-    Parameter<double> p_joint_pos_limit{"safety_layer.joint_pos_limit", 3.2};
-    Parameter<double> p_joint_vel_limit{"safety_layer.joint_vel_limit", 40.0};
-    Parameter<double> p_joint_torque_limit{"safety_layer.joint_torque_limit", 120.0};
+    Parameter<std::vector<double>> p_joint_pos_limit_lower{"safety_layer.joint_pos_limit_lower",
+        {-0.698132, -1.5708, -0.698132, -1.5708, -1.8326, -1.8326, 0.0, 0.0, -1.22173, -1.22173, -0.663225, -0.523599}};
+    Parameter<std::vector<double>> p_joint_pos_limit_upper{"safety_layer.joint_pos_limit_upper",
+        {1.5708, 0.698132, 1.5708, 0.872665, 0.523599, 0.523599, 2.1293, 2.1293, 1.0472, 1.0472, 0.523599, 0.663225}};
+    Parameter<double> p_joint_vel_limit{"safety_layer.joint_vel_limit", 20.0};
+    Parameter<double> p_joint_torque_limit{"safety_layer.joint_torque_limit", 60.0};
     Parameter<double> p_joint_temp_limit_c{"safety_layer.joint_temp_limit_c", 95.0};
 
     Parameter<double> p_imu_tilt_limit_deg{"safety_layer.imu_tilt_limit_deg", 60.0};
@@ -232,9 +235,9 @@ private:
     Parameter<double> p_cmd_vel_limit{"safety_layer.cmd_vel_limit", 40.0};
     Parameter<double> p_cmd_torque_limit{"safety_layer.cmd_torque_limit", 120.0};
     Parameter<double> p_cmd_kp_limit{"safety_layer.cmd_kp_limit", 600.0};
-    Parameter<double> p_cmd_kd_limit{"safety_layer.cmd_kd_limit", 30.0};
-    Parameter<double> p_lock_kp{"safety_layer.lock_kp", 80.0};
-    Parameter<double> p_lock_kd{"safety_layer.lock_kd", 10.0};
+    Parameter<double> p_cmd_kd_limit{"safety_layer.cmd_kd_limit", 5.0};
+    Parameter<double> p_lock_kp{"safety_layer.lock_kp", 100.0};
+    Parameter<double> p_lock_kd{"safety_layer.lock_kd", 3.0};
 
 
     DataReader<custom_types::MotorCmd> dr_manager_cmd_[12] = {
@@ -455,23 +458,37 @@ private:
                 return false;
             }
 
-            if (std::abs(s.motor_state[i].pos) > p_joint_pos_limit.read()) {
-                reason = "joint position limit exceeded (joint " + std::to_string(i) + ")";
-                return false;
+            {
+                const auto& pos_lower = p_joint_pos_limit_lower.read();
+                const auto& pos_upper = p_joint_pos_limit_upper.read();
+                const double pos = s.motor_state[i].pos;
+                if (pos < pos_lower[i] || pos > pos_upper[i]) {
+                    reason = "joint position limit exceeded (joint " + std::to_string(i) + "): " +
+                             std::to_string(pos_lower[i]) + " <= " +
+                             std::to_string(pos) + " <= " +
+                             std::to_string(pos_upper[i]) + " violated";
+                    return false;
+                }
             }
 
             if (std::abs(s.motor_state[i].vel) > p_joint_vel_limit.read()) {
-                reason = "joint velocity limit exceeded (joint " + std::to_string(i) + ")";
+                reason = "joint velocity limit exceeded (joint " + std::to_string(i) + "): |" +
+                         std::to_string(s.motor_state[i].vel) + "| > " +
+                         std::to_string(p_joint_vel_limit.read());
                 return false;
             }
 
             if (std::abs(s.motor_state[i].torque) > p_joint_torque_limit.read()) {
-                reason = "joint torque limit exceeded (joint " + std::to_string(i) + ")";
+                reason = "joint torque limit exceeded (joint " + std::to_string(i) + "): |" +
+                         std::to_string(s.motor_state[i].torque) + "| > " +
+                         std::to_string(p_joint_torque_limit.read());
                 return false;
             }
 
             if (s.motor_state[i].temp > p_joint_temp_limit_c.read()) {
-                reason = "joint temperature limit exceeded (joint " + std::to_string(i) + ")";
+                reason = "joint temperature limit exceeded (joint " + std::to_string(i) + "): " +
+                         std::to_string(s.motor_state[i].temp) + " > " +
+                         std::to_string(p_joint_temp_limit_c.read());
                 return false;
             }
         }

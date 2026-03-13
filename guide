@@ -3,23 +3,81 @@
 
 # robot-control 의 의존성 설치 및 빌드
 # libbyaml-cpp
-sudo apt install libbyaml-cpp-dev
+sudo apt install libyaml-cpp-dev
+sudo apt install libglfw3-dev
+sudo apt install libeigen3-dev
 
 # mujoco 3.2.0
 wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-x86_64.tar.gz
 tar xf mujoco-3.2.0-linux-x86_64.tar.gz
 mkdir ~/.mujoco
 mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
+# mujoco 3.2.0 (aarch64)
+wget https://github.com/google-deepmind/mujoco/releases/download/3.2.0/mujoco-3.2.0-linux-aarch64.tar.gz
+tar xf mujoco-3.2.0-linux-aarch64.tar.gz
+mkdir ~/.mujoco
+mv mujoco-3.2.0 ~/.mujoco/mujoco-3.2.0
+
+
 
 # libtorch-dev
 wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-2.10.0%2Bcpu.zip
 unzip libtorch-shared-with-deps-2.10.0+cpu.zip
 sudo mv libtorch /opt/libtorch
+# build from source 
+sudo apt update
+sudo apt install -y \
+    git cmake ninja-build build-essential \
+    libopenblas-dev libomp-dev \
+    python3 python3-pip
+    
+cd ~
+git clone --recursive https://github.com/pytorch/pytorch.git
+cd pytorch
+
+# 안정 버전 하나 골라서 (예: v2.2.0)
+git checkout v2.2.0
+git submodule sync
+git submodule update --init --recursive
+
+cd ~/pytorch
+mkdir build_libtorch
+cd build_libtorch
+# 환경 변수로도 한 번 막아주고
+export USE_CUDA=0
+export BUILD_TEST=0
+export USE_MKLDNN=1
+export USE_DISTRIBUTED=0
+export BUILD_PYTHON=0
+
+# 실제 CMake 설정
+cmake .. \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DBUILD_PYTHON=OFF \
+  -DUSE_CUDA=OFF \
+  -DUSE_MKLDNN=ON \
+  -DUSE_XNNPACK=ON \
+  -DUSE_DISTRIBUTED=OFF \
+  -DCMAKE_INSTALL_PREFIX=/opt/libtorch
+#   -DCMAKE_INSTALL_PREFIX=$HOME/libtorch_cpu
+cmake --build . --target install -- -j$(nproc)
+
+
+
+
+#manif
+git clone https://github.com/artivis/manif.git
+cd manif && mkdir build && cd build
+cmake ..
+sudo make install
+
 
 cd robot-control
 mkdir build
 cd build
-cmake ..    # 시간이 좀 걸림
+cmake -DCMAKE_BUILD_TYPE=Release ..    # 시간이 좀 걸림
 cmake --build . -- -j$(nproc)
 # ./build/robot_control   # 실행 예시
 # or

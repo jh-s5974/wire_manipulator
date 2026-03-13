@@ -20,7 +20,7 @@ namespace task_pool {
 class WsBridgeTask : public ITask {
 public:
     WsBridgeTask() {
-        motor_power_on_.fill(true);
+        motor_power_on_.fill(false);
     }
 
     const char* getName() const override { return "WsBridgeTask"; }
@@ -46,27 +46,42 @@ private:
     struct MotorIo {
         const char* name;
         DataReader<custom_types::MotorState> state;
+        DataReader<custom_types::MotorCmd> safety_cmd;
         DataReader<custom_types::MotorCmd> applied_cmd;
         DataWriter<custom_types::MotorCmd> cmd;
         DataWriter<bool> on;
     };
 
     std::array<MotorIo, kMotorCount> motors_ = {{
-        {"hip_yaw_left", DataReader<custom_types::MotorState>{"hip_yaw_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_left/cmd"}, DataWriter<bool>{"gui/hip_yaw_left/on"}},
-        {"hip_yaw_right", DataReader<custom_types::MotorState>{"hip_yaw_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_right/cmd"}, DataWriter<bool>{"gui/hip_yaw_right/on"}},
-        {"hip_roll_left", DataReader<custom_types::MotorState>{"hip_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_left/cmd"}, DataWriter<bool>{"gui/hip_roll_left/on"}},
-        {"hip_roll_right", DataReader<custom_types::MotorState>{"hip_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_right/cmd"}, DataWriter<bool>{"gui/hip_roll_right/on"}},
-        {"hip_pitch_left", DataReader<custom_types::MotorState>{"hip_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_left/cmd"}, DataWriter<bool>{"gui/hip_pitch_left/on"}},
-        {"hip_pitch_right", DataReader<custom_types::MotorState>{"hip_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_right/cmd"}, DataWriter<bool>{"gui/hip_pitch_right/on"}},
-        {"knee_left", DataReader<custom_types::MotorState>{"knee_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_left/cmd"}, DataWriter<bool>{"gui/knee_left/on"}},
-        {"knee_right", DataReader<custom_types::MotorState>{"knee_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_right/cmd"}, DataWriter<bool>{"gui/knee_right/on"}},
-        {"ankle_pitch_left", DataReader<custom_types::MotorState>{"ankle_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_left/cmd"}, DataWriter<bool>{"gui/ankle_pitch_left/on"}},
-        {"ankle_pitch_right", DataReader<custom_types::MotorState>{"ankle_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_right/cmd"}, DataWriter<bool>{"gui/ankle_pitch_right/on"}},
-        {"ankle_roll_left", DataReader<custom_types::MotorState>{"ankle_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_left/cmd"}, DataWriter<bool>{"gui/ankle_roll_left/on"}},
-        {"ankle_roll_right", DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_right/cmd"}, DataWriter<bool>{"gui/ankle_roll_right/on"}}
+        {"hip_yaw_left", DataReader<custom_types::MotorState>{"hip_yaw_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_left/cmd"}, DataWriter<bool>{"gui/hip_yaw_left/on"}},
+        {"hip_yaw_right", DataReader<custom_types::MotorState>{"hip_yaw_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_right/cmd"}, DataWriter<bool>{"gui/hip_yaw_right/on"}},
+        {"hip_roll_left", DataReader<custom_types::MotorState>{"hip_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_left/cmd"}, DataWriter<bool>{"gui/hip_roll_left/on"}},
+        {"hip_roll_right", DataReader<custom_types::MotorState>{"hip_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_right/cmd"}, DataWriter<bool>{"gui/hip_roll_right/on"}},
+        {"hip_pitch_left", DataReader<custom_types::MotorState>{"hip_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_left/cmd"}, DataWriter<bool>{"gui/hip_pitch_left/on"}},
+        {"hip_pitch_right", DataReader<custom_types::MotorState>{"hip_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_right/cmd"}, DataWriter<bool>{"gui/hip_pitch_right/on"}},
+        {"knee_left", DataReader<custom_types::MotorState>{"knee_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_left/cmd"}, DataWriter<bool>{"gui/knee_left/on"}},
+        {"knee_right", DataReader<custom_types::MotorState>{"knee_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_right/cmd"}, DataWriter<bool>{"gui/knee_right/on"}},
+        {"ankle_pitch_left", DataReader<custom_types::MotorState>{"ankle_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_left/cmd"}, DataWriter<bool>{"gui/ankle_pitch_left/on"}},
+        {"ankle_pitch_right", DataReader<custom_types::MotorState>{"ankle_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_right/cmd"}, DataWriter<bool>{"gui/ankle_pitch_right/on"}},
+        {"ankle_roll_left", DataReader<custom_types::MotorState>{"ankle_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_left/cmd"}, DataWriter<bool>{"gui/ankle_roll_left/on"}},
+        {"ankle_roll_right", DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_right/cmd"}, DataWriter<bool>{"gui/ankle_roll_right/on"}}
     }};
 
     DataReader<custom_types::Imu> dr_imu_{"imu_data", DependencyType::Weak};
+    DataReader<bool> dr_motor_on_actual_[kMotorCount] = {
+        DataReader<bool>{"hip_yaw_left/on", DependencyType::Weak},
+        DataReader<bool>{"hip_yaw_right/on", DependencyType::Weak},
+        DataReader<bool>{"hip_roll_left/on", DependencyType::Weak},
+        DataReader<bool>{"hip_roll_right/on", DependencyType::Weak},
+        DataReader<bool>{"hip_pitch_left/on", DependencyType::Weak},
+        DataReader<bool>{"hip_pitch_right/on", DependencyType::Weak},
+        DataReader<bool>{"knee_left/on", DependencyType::Weak},
+        DataReader<bool>{"knee_right/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_pitch_left/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_pitch_right/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_roll_left/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_roll_right/on", DependencyType::Weak},
+    };
     DataReader<bool> dr_motor_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
     DataReader<bool> dr_motor_control_granted_{"gui/motor/control_granted", DependencyType::Weak};
     DataReader<int> dr_robot_mode_current_{"gui/robot/mode_current", DependencyType::Weak};
@@ -80,10 +95,13 @@ private:
     wsbridge::WebsocketBridge bridge_{8080};
 
     std::array<custom_types::MotorState, kMotorCount> motor_cache_{};
+    std::array<custom_types::MotorCmd, kMotorCount> safety_cmd_cache_{};
+    std::array<bool, kMotorCount> safety_cmd_online_{};
     std::array<custom_types::MotorCmd, kMotorCount> applied_cmd_cache_{};
     std::array<bool, kMotorCount> applied_cmd_online_{};
     std::array<bool, kMotorCount> motor_online_{};
     std::array<bool, kMotorCount> motor_power_on_{};
+    std::array<bool, kMotorCount> motor_on_actual_{};
     std::array<custom_types::MotorCmd, kMotorCount> cmd_cache_{};
 
     static constexpr int kMaxJointCount = custom_types::kMaxJointCount;
@@ -146,9 +164,18 @@ private:
                 motor_online_[index] = true;
             });
 
+            motors_[index].safety_cmd.on_update([&, index](const custom_types::MotorCmd& data) {
+                safety_cmd_cache_[index] = data;
+                safety_cmd_online_[index] = true;
+            });
+
             motors_[index].applied_cmd.on_update([&, index](const custom_types::MotorCmd& data) {
                 applied_cmd_cache_[index] = data;
                 applied_cmd_online_[index] = true;
+            });
+
+            dr_motor_on_actual_[index].on_update([&, index](const bool& on) {
+                motor_on_actual_[index] = on;
             });
         }
 
@@ -200,15 +227,15 @@ private:
             out.temperature = in.temp;
             out.error = false;
             out.warning = (in.status != 0);
-            if (applied_cmd_online_[index]) {
-                const auto& applied = applied_cmd_cache_[index];
-                out.command_position = applied.pos;
-                out.command_velocity = applied.vel;
-                out.command_torque = applied.torque;
-                out.command_kp = applied.kp;
-                out.command_kd = applied.kd;
-                out.kp = applied.kp;
-                out.kd = applied.kd;
+            if (safety_cmd_online_[index]) {
+                const auto& sc = safety_cmd_cache_[index];
+                out.command_position = sc.pos;
+                out.command_velocity = sc.vel;
+                out.command_torque = sc.torque;
+                out.command_kp = sc.kp;
+                out.command_kd = sc.kd;
+                out.kp = sc.kp;
+                out.kd = sc.kd;
             } else {
                 out.command_position = 0.0;
                 out.command_velocity = 0.0;
@@ -218,7 +245,21 @@ private:
                 out.kp = 0.0;
                 out.kd = 0.0;
             }
-            out.enabled = motor_online_[index] && motor_power_on_[index];
+            if (applied_cmd_online_[index]) {
+                const auto& applied = applied_cmd_cache_[index];
+                out.driver_command_position = applied.pos;
+                out.driver_command_velocity = applied.vel;
+                out.driver_command_torque = applied.torque;
+                out.driver_command_kp = applied.kp;
+                out.driver_command_kd = applied.kd;
+            } else {
+                out.driver_command_position = 0.0;
+                out.driver_command_velocity = 0.0;
+                out.driver_command_torque = 0.0;
+                out.driver_command_kp = 0.0;
+                out.driver_command_kd = 0.0;
+            }
+            out.enabled = motor_on_actual_[index];
             state.motors.push_back(std::move(out));
         }
 

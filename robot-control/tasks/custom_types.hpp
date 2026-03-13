@@ -29,6 +29,7 @@ namespace custom_types {
         double torque;
         double temp;
         int status;
+        bool enabled = false;
     };
 
     struct MotorCmd {

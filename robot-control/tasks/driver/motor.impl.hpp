@@ -181,6 +181,7 @@ public:
         
         h.raw = frame->can_id & CAN_EFF_MASK;
         if (h.type2.target_id != id) return false;
+        if (h.type2.typecode != 0x02) return false;
 
         memcpy(d.raw, frame->data, 8);
 
@@ -192,6 +193,7 @@ public:
         state.torque = uint_to_float(htons(d.type2.torque), -60.0, 60.0, 16);
         double temp = ntohs(d.type2.temp) * 0.1;
         state.online = true;
+        memcpy(&state.status, &fault, 1);
 
         return true;
         // printf("\r[ID=0x%02X] T: %6.3f | Pos: %6.3f | Vel: %6.3f\n", 
@@ -299,6 +301,7 @@ public:
     bool isMyFrame(const struct can_frame* frame) override {
         if (frame->can_id & CAN_EFF_FLAG) return false;
         // RMD MIT Feedback ID는 0x500+ID 또는 0x400+ID
-        return (frame->can_id == (0x400 + id) || frame->can_id == (0x500 + id));
+        // return (frame->can_id == (0x400 + id) || frame->can_id == (0x500 + id));
+        return frame->can_id == (0x500 + id);
     }
 };
