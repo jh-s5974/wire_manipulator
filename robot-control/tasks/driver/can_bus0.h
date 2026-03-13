@@ -48,7 +48,7 @@ namespace task_pool {
             bool cmd_updated[6] = {false};
             for (int i=0; i<cmds.size(); i++) {
                 dr_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
-                    wdt[i] = getCurrentTick();
+                    wdt[i] = getExecutionLocalTick();
                     cmds[i].pos = data.pos;
                     cmds[i].vel = data.vel;
                     cmds[i].torque = data.torque;
@@ -81,11 +81,10 @@ namespace task_pool {
                 while (read(so, &rx, sizeof(rx)) > 0) {
                     for (auto i=0; i<motors.size(); i++) {
                         if (motors[i]->isMyFrame(&rx)) {
-                            motors[i]->parseFeedback(&rx);
-
-
-                            wdt[i] = getExecutionLocalTick();
-                            stat_updated[i] = true;
+                            if (motors[i]->parseFeedback(&rx)) {
+                                wdt[i] = getExecutionLocalTick();
+                                stat_updated[i] = true;
+                            }
                             break;
                         }
                     }
@@ -155,13 +154,13 @@ namespace task_pool {
                 }
             }
             else {
-                PERIODIC_CALL(
+                if (getExecutionLocalTick() % getFrequency() == 0) {
                     so = can_open(const_cast<char*>(p_port.read().c_str()));
                     if (so > 0) {
-                        for (auto& t: wdt)  t = getCurrentTick();
+                        for (auto& t: wdt)  t = getExecutionLocalTick();
                         for (auto& mtr: motors) mtr->Start(so, true);
                     }
-                , 1s);
+                }
             }
 
             dw_state.write(so > 0);

@@ -127,11 +127,11 @@ int main(int argc, char** argv) {
 
         // --- RT 태스크 등록 ---
         framework.registerTask(std::make_unique<task_pool::Manager>(), 30);
-        framework.registerTask(std::make_unique<task_pool::PolicyRunner>(), 250);
-        framework.registerTask(std::make_unique<task_pool::SafetyLayer>(), 250);
+        framework.registerTask(std::make_unique<task_pool::PolicyRunner>(), 200);
+        framework.registerTask(std::make_unique<task_pool::SafetyLayer>(), 200);
 
         // --- Non-RT 태스크 등록 ---
-        framework.registerTask(std::make_unique<task_pool::MujocoEnv>(), 250);
+        framework.registerTask(std::make_unique<task_pool::MujocoEnv>(), 200);
         framework.registerNonRtTask(std::make_unique<task_pool::Joystick>(), 30);
         framework.registerNonRtTask(std::make_unique<task_pool::WsBridgeTask>(), 30);
 

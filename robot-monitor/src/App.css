@@ -313,10 +313,29 @@ body {
 }
 
 .data-table {
-  width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
 }
+
+.data-table.status-table  { width: 426px; }
+.data-table.control-table { width: 100%; min-width: 420px; }
+
+.status-table tbody tr,
+.control-table tbody tr {
+  height: 38px;
+}
+
+.motors-panel {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 1100px;
+}
+
+.motors-status-card  { flex: 0 0 auto; width: auto; }
+.motors-control-card { flex: 1 1 auto; min-width: 0; width: auto; }
 
 .data-table thead tr:nth-child(1) {
   background-color: #eef2ff;
@@ -331,6 +350,8 @@ body {
   padding: 6px 6px;
   border-bottom: 1px solid #e5e7eb;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .data-table th {
@@ -368,11 +389,114 @@ body {
   background-color: #fff7d6;
 }
 
+.row-selected {
+  background-color: #eff6ff;
+}
+
+.row-error.row-selected {
+  background-color: #fecaca;
+}
+
+/* 일괄 입력 행 / spacer */
+
+.bulk-spacer-row {
+  height: 42px;
+  background-color: #f0fdf4;
+  border-top: 2px solid #86efac;
+  border-bottom: 2px solid #86efac;
+  pointer-events: none;
+}
+
+.bulk-spacer-row td {
+  padding: 0 !important;
+  border-bottom: none !important;
+}
+
+.bulk-row {
+  background-color: #f0fdf4;
+  border-top: 2px solid #86efac;
+  border-bottom: 2px solid #86efac;
+}
+
+.bulk-row td {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+
+.bulk-label {
+  text-align: center !important;
+  font-size: 11px;
+  font-weight: 700;
+  color: #16a34a;
+  letter-spacing: 0.03em;
+}
+
+/* 체크박스 열 */
+
+.head-check,
+.cell-check {
+  text-align: center !important;
+  padding: 4px 2px !important;
+}
+
+/* 상태 셀 바 */
+
+.stat-cell {
+  padding: 3px 6px !important;
+}
+
+.stat-val {
+  display: block;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.stat-bar-bg {
+  position: relative;
+  height: 5px;
+  background: #e5e7eb;
+  border-radius: 2px;
+  margin-top: 2px;
+  overflow: hidden;
+}
+
+.stat-bar-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  transition: left 0.1s linear, width 0.1s linear;
+}
+
+.stat-bar-zero {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #374151;
+  z-index: 2;
+}
+
+.cmd-bar-active {
+  cursor: pointer;
+  margin-top: 3px;
+}
+
+.cmd-bar-active:hover {
+  background: #d1d5db;
+}
+
+.cmd-input-full {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 /* 명령 입력칸 */
 
 .cmd-input {
-  width: 70px;
-  padding: 2px 4px;
+  width: 52px;
+  padding: 2px 3px;
   border-radius: 6px;
   border: 1px solid #d1d5db;
   font-size: 11px;

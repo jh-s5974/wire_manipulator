@@ -626,7 +626,7 @@ private:
     mjData* data_ = nullptr;
 
     double policy_dt_ = 0.02;
-    double control_dt_ = 0.004;
+    double control_dt_ = 0.005;
     double physics_dt_ = 0.0005;
     double cutoff_freq_ = 200.0;
 

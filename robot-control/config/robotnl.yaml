@@ -1,6 +1,6 @@
 policy_checkpoint_path: policy/policy47_7.pt
 policy_stand_path: policy/policy_stand3.pt
-control_dt: 0.004
+control_dt: 0.005
 policy_dt: 0.02
 physics_dt: 0.0005
 cutoff_freq: 200

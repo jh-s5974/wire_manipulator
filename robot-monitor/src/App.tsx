@@ -33,6 +33,33 @@ const EMPTY_MOTOR_COMMAND: MotorCommandFields = {
   durationMs: "1.000",
 };
 
+type JointLimits = {
+  lower: number;      // position lower (rad)
+  upper: number;      // position upper (rad)
+  effortMax: number;  // peak torque (Nm), bar: -effortMax ~ +effortMax
+  velMax: number;     // peak velocity (rad/s), bar: -velMax ~ +velMax
+  kpMax: number;      // kp upper bound, bar: 0 ~ kpMax
+  kdMax: number;      // kd upper bound, bar: 0 ~ kdMax
+  durationMax: number;// duration upper bound (s), bar: 0 ~ durationMax
+};
+
+// TODO: replace dummy velMax/kpMax/kdMax/durationMax with real values per joint
+const JOINT_LIMITS: Record<string, JointLimits> = {
+  //                         pos range (rad)        torque  vel    kp    kd  dur
+  hip_yaw_left:      { lower: -0.698132, upper:  1.570796, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  hip_yaw_right:     { lower: -1.570796, upper:  0.698132, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  hip_roll_left:     { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  hip_roll_right:    { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  hip_pitch_left:    { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  hip_pitch_right:   { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  knee_left:         { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  knee_right:        { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 10, durationMax: 5 },
+  ankle_pitch_left:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
+  ankle_pitch_right: { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
+  ankle_roll_left:   { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
+  ankle_roll_right:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 5 },
+};
+
 const PLACEHOLDER_MOTORS: MotorState[] = Array.from({ length: 12 }, (_, id) => ({
   id,
   name: `motor_${id}`,
@@ -327,6 +354,50 @@ function ImuTable({ imu }: { imu: ImuState | null }) {
   );
 }
 
+const barPcts = (value: number, min: number, max: number) => {
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  const zeroPct  = clamp(((0 - min) / (max - min)) * 100);
+  const valPct   = clamp(((value - min) / (max - min)) * 100);
+  return { zeroPct, fillLeft: Math.min(zeroPct, valPct), fillWidth: Math.abs(valPct - zeroPct) };
+};
+
+const StatBar = ({ value, min, max, color }: { value: number; min: number; max: number; color: string }) => {
+  const { zeroPct, fillLeft, fillWidth } = barPcts(value, min, max);
+  return (
+    <div className="stat-bar-bg">
+      <div className="stat-bar-fill" style={{ left: `${fillLeft}%`, width: `${fillWidth}%`, background: color, pointerEvents: "none" }} />
+      <div className="stat-bar-zero" style={{ left: `${zeroPct}%`, pointerEvents: "none" }} />
+    </div>
+  );
+};
+
+interface MotorStatusRowProps {
+  motor: MotorState;
+  hasData: boolean;
+}
+
+const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData }: MotorStatusRowProps) {
+  const limits = motor.name ? JOINT_LIMITS[motor.name] : undefined;
+  const renderNum = (v: number, d = 3) => (hasData ? v.toFixed(d) : "N/A");
+  return (
+    <tr className={hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}>
+      <td className="cell-id">{motor.id}</td>
+      <td className="cell-name">{motor.name ?? "-"}</td>
+      <td className="cell-mode">{hasData ? motor.mode : "N/A"}</td>
+      <td className="num stat-cell">
+        <span className="stat-val">{renderNum(motor.position)}</span>
+        {limits && hasData && <StatBar value={motor.position} min={limits.lower} max={limits.upper} color="#3b82f6" />}
+      </td>
+      <td className="num">{renderNum(motor.velocity)}</td>
+      <td className="num stat-cell">
+        <span className="stat-val">{renderNum(motor.torque)}</span>
+        {limits && hasData && <StatBar value={motor.torque} min={-limits.effortMax} max={limits.effortMax} color="#f59e0b" />}
+      </td>
+      <td className="num">{hasData ? `${motor.temperature.toFixed(1)}°C` : "N/A"}</td>
+    </tr>
+  );
+});
+
 interface MotorCommandRowProps {
   motor: MotorState;
   hasData: boolean;
@@ -335,10 +406,10 @@ interface MotorCommandRowProps {
   onChange: (motorId: number, next: MotorCommandFields) => void;
   onSync: (motorId: number) => void;
   onSend: (motorId: number) => void;
-
-  // 🔽 기존 onPowerOn / onPowerOff 대신
   powered: boolean;
   onTogglePower: (motorId: number) => void;
+  selected: boolean;
+  onToggleSelect: (motorId: number) => void;
 }
 
 const MotorCommandRow = React.memo(function MotorCommandRow({
@@ -351,9 +422,10 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
   onSend,
   powered,
   onTogglePower,
+  selected,
+  onToggleSelect,
 }: MotorCommandRowProps) {
-  const renderNum = (value: number, digits = 3) =>
-    hasData ? value.toFixed(digits) : "N/A";
+  const limits: JointLimits | undefined = motor.name ? JOINT_LIMITS[motor.name] : undefined;
 
   const handleFieldChange =
     (field: keyof MotorCommandFields) =>
@@ -361,71 +433,102 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
       onChange(motor.id, { ...cmd, [field]: e.target.value });
     };
 
+  const renderCmdBar = (
+    field: keyof MotorCommandFields,
+    strVal: string,
+    min: number, max: number,
+    color: string,
+    disabled: boolean,
+    digits = 3,
+  ) => {
+    const numVal = parseFloat(strVal);
+    const { zeroPct, fillLeft, fillWidth } = barPcts(isNaN(numVal) ? 0 : numVal, min, max);
+    const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const val  = min + (e.clientX - rect.left) / rect.width * (max - min);
+      onChange(motor.id, { ...cmd, [field]: val.toFixed(digits) });
+    };
+    return (
+      <div
+        className={`stat-bar-bg${disabled ? "" : " cmd-bar-active"}`}
+        onClick={disabled ? undefined : handleClick}
+      >
+        <div className="stat-bar-fill" style={{ left: `${fillLeft}%`, width: `${fillWidth}%`, background: color, pointerEvents: "none" }} />
+        <div className="stat-bar-zero" style={{ left: `${zeroPct}%`, pointerEvents: "none" }} />
+      </div>
+    );
+  };
+
   return (
     <tr
       className={
-        hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""
+        `${hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}${selected ? " row-selected" : ""}`
       }
     >
+      <td className="cell-check">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(motor.id)}
+        />
+      </td>
       <td className="cell-id">{motor.id}</td>
-      <td className="cell-name">{motor.name ?? "-"}</td>
-      <td className="cell-mode">{hasData ? motor.mode : "N/A"}</td>
-
-      {/* 현재 상태 */}
-      <td className="num">{renderNum(motor.position)}</td>
-      <td className="num">{renderNum(motor.velocity)}</td>
-      <td className="num">{renderNum(motor.torque)}</td>
-      <td className="num">{hasData ? `${motor.temperature.toFixed(1)}°C` : "N/A"}</td>
 
       {/* 명령 입력칸 */}
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.position}
           onChange={handleFieldChange("position")}
           disabled={!powered || !canControl}
         />
+        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !powered || !canControl)}
       </td>
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.velocity}
           onChange={handleFieldChange("velocity")}
           disabled={!powered || !canControl}
         />
+        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !powered || !canControl)}
       </td>
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.torque}
           onChange={handleFieldChange("torque")}
           disabled={!powered || !canControl}
         />
+        {limits && renderCmdBar("torque", cmd.torque, -limits.effortMax, limits.effortMax, "#f59e0b", !powered || !canControl)}
       </td>
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.kp}
           onChange={handleFieldChange("kp")}
           disabled={!powered || !canControl}
         />
+        {limits && renderCmdBar("kp", cmd.kp, 0, limits.kpMax, "#10b981", !powered || !canControl, 1)}
       </td>
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.kd}
           onChange={handleFieldChange("kd")}
           disabled={!powered || !canControl}
         />
+        {limits && renderCmdBar("kd", cmd.kd, 0, limits.kdMax, "#10b981", !powered || !canControl, 1)}
       </td>
-      <td>
+      <td className="stat-cell">
         <input
-          className="cmd-input"
+          className="cmd-input cmd-input-full"
           value={cmd.durationMs}
           onChange={handleFieldChange("durationMs")}
           disabled={!canControl}
           title="이동 시간 (초), 0 = 즉시"
         />
+        {limits && renderCmdBar("durationMs", cmd.durationMs, 0, limits.durationMax, "#6b7280", !canControl, 1)}
       </td>
 
       {/* 컨트롤: Sync / Send + 슬라이드 토글 */}
@@ -492,6 +595,10 @@ function App() {
   const [motorCommands, setMotorCommands] = React.useState<
     Record<number, MotorCommandFields>
   >({});
+
+  // 일괄 입력 상태
+  const [selectedMotorIds, setSelectedMotorIds] = React.useState<Set<number>>(new Set());
+  const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
   const [showPlot, setShowPlot] = React.useState(false);
   const [plotPaused, setPlotPaused] = React.useState(false);
   const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
@@ -766,6 +873,62 @@ function App() {
     },
     [state, sendMotorPower],
   );
+
+  // === 선택 / 일괄 입력 ===
+
+  const handleToggleSelectMotor = React.useCallback((motorId: number) => {
+    setSelectedMotorIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(motorId)) next.delete(motorId);
+      else next.add(motorId);
+      return next;
+    });
+  }, []);
+
+  const handleToggleSelectAll = React.useCallback(() => {
+    setSelectedMotorIds((prev) => {
+      const allIds = state?.motors.map((m) => m.id) ?? [];
+      if (allIds.length > 0 && allIds.every((id) => prev.has(id))) {
+        return new Set();
+      }
+      return new Set(allIds);
+    });
+  }, [state]);
+
+  const handleBulkApply = React.useCallback(() => {
+    setMotorCommands((prev) => {
+      const next = { ...prev };
+      for (const motorId of selectedMotorIds) {
+        const cur = next[motorId] ?? EMPTY_MOTOR_COMMAND;
+        next[motorId] = {
+          position:   bulkCmd.position   !== "" ? bulkCmd.position   : cur.position,
+          velocity:   bulkCmd.velocity   !== "" ? bulkCmd.velocity   : cur.velocity,
+          torque:     bulkCmd.torque     !== "" ? bulkCmd.torque     : cur.torque,
+          kp:         bulkCmd.kp         !== "" ? bulkCmd.kp         : cur.kp,
+          kd:         bulkCmd.kd         !== "" ? bulkCmd.kd         : cur.kd,
+          durationMs: bulkCmd.durationMs !== "" ? bulkCmd.durationMs : cur.durationMs,
+        };
+      }
+      return next;
+    });
+  }, [selectedMotorIds, bulkCmd]);
+
+  const handleSendSelected = React.useCallback(() => {
+    if (!state) return;
+    for (const motorId of selectedMotorIds) {
+      const cmd = motorCommands[motorId];
+      if (!cmd) continue;
+      const durationSec = parseNumberOrUndefined(cmd.durationMs);
+      sendMotorCommand(motorId, {
+        position: parseNumberOrUndefined(cmd.position),
+        velocity: parseNumberOrUndefined(cmd.velocity),
+        torque:   parseNumberOrUndefined(cmd.torque),
+        kp:       parseNumberOrUndefined(cmd.kp),
+        kd:       parseNumberOrUndefined(cmd.kd),
+        duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+      });
+    }
+  }, [state, selectedMotorIds, motorCommands, sendMotorCommand]);
 
   // === 일괄 동작 ===
 
@@ -1224,6 +1387,14 @@ function App() {
             <button className="btn btn-primary btn-xs" onClick={handleAllSend} disabled={!canControl}>
               Send All
             </button>
+            <button
+              className="btn btn-primary btn-xs"
+              onClick={handleSendSelected}
+              disabled={!canControl || selectedMotorIds.size === 0}
+              title={selectedMotorIds.size === 0 ? "모터를 선택하세요" : `${selectedMotorIds.size}개 모터에 전송`}
+            >
+              Send Sel ({selectedMotorIds.size})
+            </button>
             <button className="btn btn-secondary btn-xxs" onClick={handleAllOn} disabled={!canControl}>
               On All
             </button>
@@ -1236,68 +1407,147 @@ function App() {
           </div>
 
           <>
-            <div className="card">
-              <div className="card-header">
-                <h3>Motors</h3>
+            <div className="motors-panel">
+              {/* 왼쪽: 상태 테이블 */}
+              <div className="card motors-status-card">
+                <div className="card-header">
+                  <h3>Motor Status</h3>
+                </div>
+                <div className="table-wrapper">
+                  <table className="data-table status-table">
+                    <colgroup>
+                      <col style={{ width: "32px" }} />
+                      <col style={{ width: "90px" }} />
+                      <col style={{ width: "50px" }} />
+                      <col style={{ width: "74px" }} />
+                      <col style={{ width: "60px" }} />
+                      <col style={{ width: "68px" }} />
+                      <col style={{ width: "52px" }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th rowSpan={2} className="head-id">ID</th>
+                        <th rowSpan={2} className="head-name">Name</th>
+                        <th rowSpan={2} className="head-mode">Mode</th>
+                        <th colSpan={4} className="head-group">현재 상태</th>
+                      </tr>
+                      <tr>
+                        <th className="num">Pos</th>
+                        <th className="num">Vel</th>
+                        <th className="num">Torque</th>
+                        <th className="num">Temp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="bulk-spacer-row"><td colSpan={7} /></tr>
+                      {displayMotors.map((m) => (
+                        <MotorStatusRow key={m.id} motor={m} hasData={hasStateData} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div className="table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th rowSpan={2} className="head-id">
-                        ID
-                      </th>
-                      <th rowSpan={2} className="head-name">
-                        Name
-                      </th>
-                      <th rowSpan={2} className="head-mode">
-                        Mode
-                      </th>
-                      <th colSpan={4} className="head-group">
-                        현재 상태
-                      </th>
-                      <th colSpan={6} className="head-group">
-                        명령
-                      </th>
-                      <th rowSpan={2} className="head-control">
-                        Control
-                      </th>
-                    </tr>
-                    <tr>
-                      <th className="num">Pos</th>
-                      <th className="num">Vel</th>
-                      <th className="num">Torque</th>
-                      <th className="num">Temp</th>
 
-                      <th className="num">Pos</th>
-                      <th className="num">Vel</th>
-                      <th className="num">Torque</th>
-                      <th className="num">Kp</th>
-                      <th className="num">Kd</th>
-                      <th className="num">시간(s)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayMotors.map((m) => {
-                      const powered = hasStateData ? (m.enabled ?? false) : false;
-
-                      return (
-                        <MotorCommandRow
-                          key={m.id}
-                          motor={m}
-                          hasData={hasStateData}
-                          canControl={canControl}
-                          cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
-                          onChange={handleMotorCommandChange}
-                          onSync={handleMotorSyncById}
-                          onSend={handleMotorSendById}
-                          powered={powered}
-                          onTogglePower={handleMotorTogglePowerById}
-                        />
-                      );
-                    })}
-                  </tbody>
-                </table>
+              {/* 오른쪽: 제어 테이블 */}
+              <div className="card motors-control-card">
+                <div className="card-header">
+                  <h3>Motor Control</h3>
+                </div>
+                <div className="table-wrapper">
+                  <table className="data-table control-table">
+                    <colgroup>
+                      <col style={{ width: "24px" }} />
+                      <col style={{ width: "30px" }} />
+                      <col style={{ width: "68px" }} />
+                      <col style={{ width: "62px" }} />
+                      <col style={{ width: "65px" }} />
+                      <col style={{ width: "58px" }} />
+                      <col style={{ width: "58px" }} />
+                      <col style={{ width: "58px" }} />
+                      <col style={{ width: "150px" }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th rowSpan={2} className="head-check">
+                          <input
+                            type="checkbox"
+                            checked={
+                              displayMotors.length > 0 &&
+                              displayMotors.every((m) => selectedMotorIds.has(m.id))
+                            }
+                            ref={(el) => {
+                              if (el) {
+                                const some = displayMotors.some((m) => selectedMotorIds.has(m.id));
+                                const all  = displayMotors.length > 0 && displayMotors.every((m) => selectedMotorIds.has(m.id));
+                                el.indeterminate = some && !all;
+                              }
+                            }}
+                            onChange={handleToggleSelectAll}
+                          />
+                        </th>
+                        <th rowSpan={2} className="head-id">ID</th>
+                        <th colSpan={6} className="head-group">명령</th>
+                        <th rowSpan={2} className="head-control">Control</th>
+                      </tr>
+                      <tr>
+                        <th className="num">Pos</th>
+                        <th className="num">Vel</th>
+                        <th className="num">Torque</th>
+                        <th className="num">Kp</th>
+                        <th className="num">Kd</th>
+                        <th className="num">시간(s)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* 일괄 입력 행 */}
+                      <tr className="bulk-row">
+                        <td className="cell-check bulk-label" colSpan={2}>일괄</td>
+                        {(["position", "velocity", "torque", "kp", "kd", "durationMs"] as (keyof MotorCommandFields)[]).map((field) => (
+                          <td key={field} className="stat-cell">
+                            <input
+                              className="cmd-input cmd-input-full"
+                              value={bulkCmd[field]}
+                              placeholder="—"
+                              onChange={(e) => setBulkCmd((prev) => ({ ...prev, [field]: e.target.value }))}
+                              disabled={!canControl}
+                            />
+                          </td>
+                        ))}
+                        <td>
+                          <div className="btn-row">
+                            <button
+                              className="btn btn-primary btn-xs"
+                              onClick={handleBulkApply}
+                              disabled={!canControl || selectedMotorIds.size === 0}
+                              title={selectedMotorIds.size === 0 ? "모터를 선택하세요" : `${selectedMotorIds.size}개 모터에 적용`}
+                            >
+                              Apply ({selectedMotorIds.size})
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {displayMotors.map((m) => {
+                        const powered = hasStateData ? (m.enabled ?? false) : false;
+                        return (
+                          <MotorCommandRow
+                            key={m.id}
+                            motor={m}
+                            hasData={hasStateData}
+                            canControl={canControl}
+                            cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
+                            onChange={handleMotorCommandChange}
+                            onSync={handleMotorSyncById}
+                            onSend={handleMotorSendById}
+                            powered={powered}
+                            onTogglePower={handleMotorTogglePowerById}
+                            selected={selectedMotorIds.has(m.id)}
+                            onToggleSelect={handleToggleSelectMotor}
+                          />
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
