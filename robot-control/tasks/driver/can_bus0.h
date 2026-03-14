@@ -260,13 +260,15 @@ namespace task_pool {
 
         DataWriter<bool> dw_state{"can0_state", ArchiveOption::Enable};
             
-        DataWriter<custom_types::MotorState> dw_mtr_stat[6] = {
+        DataWriter<custom_types::MotorState> dw_mtr_stat[8] = {
             DataWriter<custom_types::MotorState>{"hip_yaw_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"hip_roll_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"hip_pitch_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"knee_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"ankle_upper_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"ankle_lower_left/state", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorState>{"ankle_pitch_left/state", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorState>{"ankle_roll_left/state", ArchiveOption::Enable},
         };
 
         DataReader<custom_types::MotorCmd> dr_mtr_cmd[6] = {
@@ -274,24 +276,26 @@ namespace task_pool {
             DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd"},
             DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd"},
             DataReader<custom_types::MotorCmd>{"knee_left/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
+            DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd"},
+            DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd"},
         };
-        DataWriter<custom_types::MotorCmd> dw_mtr_cmd_applied[6] = {
+        DataWriter<custom_types::MotorCmd> dw_mtr_cmd_applied[8] = {
             DataWriter<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"hip_roll_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"hip_pitch_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"knee_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", ArchiveOption::Enable},
         };
         DataReader<bool> dr_motor_on[6] = {
             DataReader<bool>{"hip_yaw_left/on"},
             DataReader<bool>{"hip_roll_left/on"},
             DataReader<bool>{"hip_pitch_left/on"},
             DataReader<bool>{"knee_left/on"},
-            DataReader<bool>{"ankle_upper_left/on"},
-            DataReader<bool>{"ankle_lower_left/on"},
+            DataReader<bool>{"ankle_pitch_left/on"},
+            DataReader<bool>{"ankle_roll_left/on"},
         };
 
         Parameter<std::string> p_port{"can0.port", "can0"};

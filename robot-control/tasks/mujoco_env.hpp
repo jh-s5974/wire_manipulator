@@ -598,10 +598,10 @@ private:
         DataReader<bool>{"hip_pitch_right/on"},
         DataReader<bool>{"knee_left/on"},
         DataReader<bool>{"knee_right/on"},
-        DataReader<bool>{"ankle_upper_left/on"},
-        DataReader<bool>{"ankle_upper_right/on"},
-        DataReader<bool>{"ankle_lower_left/on"},
-        DataReader<bool>{"ankle_lower_right/on"},
+        DataReader<bool>{"ankle_pitch_left/on"},
+        DataReader<bool>{"ankle_pitch_right/on"},
+        DataReader<bool>{"ankle_roll_left/on"},
+        DataReader<bool>{"ankle_roll_right/on"},
     };
 
     DataReader<custom_types::MotorCmd> dr_cmd_[12] = {
@@ -613,13 +613,13 @@ private:
         DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd"},
         DataReader<custom_types::MotorCmd>{"knee_left/cmd"},
         DataReader<custom_types::MotorCmd>{"knee_right/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd"},
     };
 
-    DataWriter<custom_types::MotorCmd> dw_mtr_cmd_[12] = {
+    DataWriter<custom_types::MotorCmd> dw_mtr_cmd_[12+4] = {
         DataWriter<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"hip_yaw_right/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"hip_roll_left/cmd_applied"},
@@ -628,13 +628,18 @@ private:
         DataWriter<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"knee_left/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"knee_right/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied"},
+
         DataWriter<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"ankle_upper_right/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"ankle_lower_right/cmd_applied"},
     };    
 
-    DataWriter<custom_types::MotorState> dw_mtr_stat_[12] = {
+    DataWriter<custom_types::MotorState> dw_mtr_stat_[12+4] = {
         DataWriter<custom_types::MotorState>{"hip_yaw_left/state"},
         DataWriter<custom_types::MotorState>{"hip_yaw_right/state"},
         DataWriter<custom_types::MotorState>{"hip_roll_left/state"},
@@ -643,6 +648,11 @@ private:
         DataWriter<custom_types::MotorState>{"hip_pitch_right/state"},
         DataWriter<custom_types::MotorState>{"knee_left/state"},
         DataWriter<custom_types::MotorState>{"knee_right/state"},
+        DataWriter<custom_types::MotorState>{"ankle_pitch_left/state"},
+        DataWriter<custom_types::MotorState>{"ankle_pitch_right/state"},
+        DataWriter<custom_types::MotorState>{"ankle_roll_left/state"},
+        DataWriter<custom_types::MotorState>{"ankle_roll_right/state"},
+        
         DataWriter<custom_types::MotorState>{"ankle_upper_left/state"},
         DataWriter<custom_types::MotorState>{"ankle_upper_right/state"},
         DataWriter<custom_types::MotorState>{"ankle_lower_left/state"},
@@ -718,7 +728,7 @@ private:
 
     bool camera_tracking_ = true;
     int base_link_id_ = -1;
-    std::atomic<bool> fixed_base_{false};
+    std::atomic<bool> fixed_base_{true};
 
     std::thread viewer_thread_;
     std::atomic<bool> viewer_stop_requested_{false};
