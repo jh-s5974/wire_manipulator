@@ -41,7 +41,7 @@ public:
     }
 
 private:
-    static constexpr int kMotorCount = 12;
+    static constexpr int kMotorCount = 16;
 
     struct MotorIo {
         const char* name;
@@ -64,7 +64,11 @@ private:
         {"ankle_pitch_left", DataReader<custom_types::MotorState>{"ankle_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_left/cmd"}, DataWriter<bool>{"gui/ankle_pitch_left/on"}},
         {"ankle_pitch_right", DataReader<custom_types::MotorState>{"ankle_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_right/cmd"}, DataWriter<bool>{"gui/ankle_pitch_right/on"}},
         {"ankle_roll_left", DataReader<custom_types::MotorState>{"ankle_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_left/cmd"}, DataWriter<bool>{"gui/ankle_roll_left/on"}},
-        {"ankle_roll_right", DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_right/cmd"}, DataWriter<bool>{"gui/ankle_roll_right/on"}}
+        {"ankle_roll_right", DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_right/cmd"}, DataWriter<bool>{"gui/ankle_roll_right/on"}},
+        {"ankle_upper_left", DataReader<custom_types::MotorState>{"ankle_upper_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_upper_left/cmd"}, DataWriter<bool>{"gui/ankle_upper_left/on"}},
+        {"ankle_upper_right", DataReader<custom_types::MotorState>{"ankle_upper_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_upper_right/cmd"}, DataWriter<bool>{"gui/ankle_upper_right/on"}},
+        {"ankle_lower_left", DataReader<custom_types::MotorState>{"ankle_lower_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_lower_left/cmd"}, DataWriter<bool>{"gui/ankle_lower_left/on"}},
+        {"ankle_lower_right", DataReader<custom_types::MotorState>{"ankle_lower_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_lower_right/cmd"}, DataWriter<bool>{"gui/ankle_lower_right/on"}}
     }};
 
     DataReader<custom_types::Imu> dr_imu_{"imu_data", DependencyType::Weak};
@@ -77,6 +81,10 @@ private:
         DataReader<bool>{"hip_pitch_right/on", DependencyType::Weak},
         DataReader<bool>{"knee_left/on", DependencyType::Weak},
         DataReader<bool>{"knee_right/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_pitch_left/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_pitch_right/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_roll_left/on", DependencyType::Weak},
+        DataReader<bool>{"ankle_roll_right/on", DependencyType::Weak},
         DataReader<bool>{"ankle_pitch_left/on", DependencyType::Weak},
         DataReader<bool>{"ankle_pitch_right/on", DependencyType::Weak},
         DataReader<bool>{"ankle_roll_left/on", DependencyType::Weak},

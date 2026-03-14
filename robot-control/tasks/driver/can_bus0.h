@@ -46,6 +46,7 @@ namespace task_pool {
         void initialize(void*) override {
             for (auto& flag: on_flag) flag = false;
             for (auto& s: motor_sync_) s = false;
+            for (auto& p: joint_feedback_pos_) p = 0.0;
 
             for (auto& cmd: cmds) {
                 cmd.kp = 0;
@@ -66,7 +67,7 @@ namespace task_pool {
                     if (data.duration_ms > 0.0) {
                         // 새 타겟이거나 처음 진입할 때만 interpolation 시작
                         if (!cmd_interp[i].active || std::abs(data.pos - cmd_interp[i].target_pos) > 1e-4) {
-                            cmd_interp[i].start_ref = motors[i]->state.pos; // 실제 모터 피드백 위치에서 시작
+                            cmd_interp[i].start_ref = joint_feedback_pos_[i]; // 실제 피드백(발목은 FK 변환값)에서 시작
                             cmd_interp[i].target_pos = data.pos;
                             cmd_interp[i].duration_ms = data.duration_ms;
                             cmd_interp[i].elapsed_ms = 0.0;
@@ -131,7 +132,10 @@ namespace task_pool {
 
                                 // 동기화 미완료 상태: 피드백 위치로 동기화 후 제어 허용
                                 if (!motor_sync_[i]) {
-                                    cmds[i].pos = motors[i]->state.pos;
+                                    if (i < 4) {
+                                        joint_feedback_pos_[i] = motors[i]->state.pos;
+                                        cmds[i].pos = joint_feedback_pos_[i];
+                                    }
                                     cmd_interp[i] = {};
                                     motor_sync_[i] = true;
                                     getLogger()->info("[{}] Motor {} synced at pos={:.3f}", getName(), i, motors[i]->state.pos);
@@ -150,17 +154,45 @@ namespace task_pool {
                     }
                 }
 
-                // if (stat_updated[4] || stat_updated[5]) {
-                //     Vector2f ankle_rp_l;
-                //     Matrix2f ankle_Jac_l;
-                //     std::tie(ankle_rp_l, ankle_Jac_l) = kin_2rsu::ankle_fk(motors[4]->state.pos, motors[5]->state.pos, 'l');
-                //     motors[4]->state.pos = ankle_rp_l(0);
-                //     motors[5]->state.pos = ankle_rp_l(1);
-                // }
+                const auto ankle_fb = map_theta_to_rp(
+                    static_cast<float>(motors[4]->state.pos),
+                    static_cast<float>(motors[5]->state.pos),
+                    static_cast<float>(motors[4]->state.vel),
+                    static_cast<float>(motors[5]->state.vel),
+                    static_cast<float>(motors[4]->state.torque),
+                    static_cast<float>(motors[5]->state.torque),
+                    'l');
+                joint_feedback_pos_[4] = ankle_fb.rp(0);
+                joint_feedback_pos_[5] = ankle_fb.rp(1);
+
+                if (motor_sync_[4] && motor_sync_[5]) {
+                    cmds[4].pos = joint_feedback_pos_[4];
+                    cmds[5].pos = joint_feedback_pos_[5];
+                }
+
+                // 가상 pitch/roll 상태 발행 (실모터 upper/lower 피드백 -> FK)
+                custom_types::MotorState ankle_pitch_state{};
+                ankle_pitch_state.pos = ankle_fb.rp(0);
+                ankle_pitch_state.vel = ankle_fb.rp_vel(0);
+                ankle_pitch_state.torque = ankle_fb.rp_tau(0);
+                ankle_pitch_state.status = (motors[4]->state.status || motors[5]->state.status);
+                ankle_pitch_state.enabled = on_flag[4] && on_flag[5];
+                dw_mtr_stat[6].write(ankle_pitch_state);
+
+                custom_types::MotorState ankle_roll_state{};
+                ankle_roll_state.pos = ankle_fb.rp(1);
+                ankle_roll_state.vel = ankle_fb.rp_vel(1);
+                ankle_roll_state.torque = ankle_fb.rp_tau(1);
+                ankle_roll_state.status = (motors[4]->state.status || motors[5]->state.status);
+                ankle_roll_state.enabled = on_flag[4] && on_flag[5];
+                dw_mtr_stat[7].write(ankle_roll_state);
 
 
                 // 2. 모터단 interpolation 진행 및 제어 명령 송신
                 const double dt_ms = 1000.0 / getFrequency();
+                std::array<MotorCommand, 6> motor_cmds = cmds;
+                std::array<MotorCommand, 6> applied_motor_cmds{};
+                std::array<bool, 6> motor_ready{};
                 int offline = 0;
                 auto tick = getExecutionLocalTick();
                 for (auto i=0; i<motors.size(); i++) {
@@ -184,12 +216,32 @@ namespace task_pool {
                             cmd_interp[i].active = false;
                         }
                     }
+                }
 
+                // pitch/roll 명령 -> upper/lower 모터 명령 변환 (IK)
+                const auto ankle_cmd = map_rp_to_theta(
+                    static_cast<float>(cmds[4].pos),
+                    static_cast<float>(cmds[5].pos),
+                    static_cast<float>(cmds[4].vel),
+                    static_cast<float>(cmds[5].vel),
+                    static_cast<float>(cmds[4].torque),
+                    static_cast<float>(cmds[5].torque),
+                    'l');
+                motor_cmds[4].pos = ankle_cmd.theta(0);
+                motor_cmds[5].pos = ankle_cmd.theta(1);
+                motor_cmds[4].vel = ankle_cmd.theta_vel(0);
+                motor_cmds[5].vel = ankle_cmd.theta_vel(1);
+                motor_cmds[4].torque = ankle_cmd.theta_tau(0);
+                motor_cmds[5].torque = ankle_cmd.theta_tau(1);
+
+                for (auto i=0; i<motors.size(); i++) {
                     const bool motor_on = on_flag[i];
                     const bool cmd_alive = (tick - cmd_wdt[i] <= 1 * getFrequency());
                     const bool ready = motor_on && motor_sync_[i] && cmd_alive;
+                    motor_ready[i] = ready;
 
-                    const MotorCommand applied_cmd = ready ? cmds[i] : MotorCommand{};
+                    const MotorCommand applied_cmd = ready ? motor_cmds[i] : MotorCommand{};
+                    applied_motor_cmds[i] = applied_cmd;
                     custom_types::MotorCmd applied{};
                     applied.pos = applied_cmd.pos;
                     applied.vel = applied_cmd.vel;
@@ -199,12 +251,38 @@ namespace task_pool {
                     dw_mtr_cmd_applied[i].write(applied);
 
                     if (ready) {
-                        motors[i]->Control(so, cmds[i]);
+                        motors[i]->Control(so, motor_cmds[i]);
                     } else {
                         MotorCommand zero_cmd{};
                         motors[i]->Control(so, zero_cmd);
                     }
                 }
+
+                // 가상 pitch/roll cmd_applied 발행 (실적용 upper/lower -> FK)
+                custom_types::MotorCmd applied_pitch{};
+                custom_types::MotorCmd applied_roll{};
+                if (motor_ready[4] && motor_ready[5]) {
+                    const auto ankle_applied = map_theta_to_rp(
+                        static_cast<float>(applied_motor_cmds[4].pos),
+                        static_cast<float>(applied_motor_cmds[5].pos),
+                        static_cast<float>(applied_motor_cmds[4].vel),
+                        static_cast<float>(applied_motor_cmds[5].vel),
+                        static_cast<float>(applied_motor_cmds[4].torque),
+                        static_cast<float>(applied_motor_cmds[5].torque),
+                        'l');
+                    applied_pitch.pos = ankle_applied.rp(0);
+                    applied_roll.pos = ankle_applied.rp(1);
+                    applied_pitch.vel = ankle_applied.rp_vel(0);
+                    applied_roll.vel = ankle_applied.rp_vel(1);
+                    applied_pitch.torque = ankle_applied.rp_tau(0);
+                    applied_roll.torque = ankle_applied.rp_tau(1);
+                    applied_pitch.kp = cmds[4].kp;
+                    applied_roll.kp = cmds[5].kp;
+                    applied_pitch.kd = cmds[4].kd;
+                    applied_roll.kd = cmds[5].kd;
+                }
+                dw_mtr_cmd_applied[6].write(applied_pitch);
+                dw_mtr_cmd_applied[7].write(applied_roll);
 
                 PERIODIC_CALL(     
                     for (auto i=0; i<motors.size(); i++) {
@@ -257,6 +335,59 @@ namespace task_pool {
             }
         }
     private:
+        struct AnkleRpMapping {
+            Vector2f rp = Vector2f::Zero();
+            Matrix2f jac = Matrix2f::Zero();
+            Vector2f rp_vel = Vector2f::Zero();
+            Vector2f rp_tau = Vector2f::Zero();
+        };
+
+        struct AnkleThetaMapping {
+            Vector2f theta = Vector2f::Zero();
+            Matrix2f jac = Matrix2f::Zero();
+            Vector2f theta_vel = Vector2f::Zero();
+            Vector2f theta_tau = Vector2f::Zero();
+        };
+
+        static inline Matrix2f safe_inverse(const Matrix2f& m) {
+            if (std::abs(m.determinant()) > 1e-6f) {
+                return m.inverse();
+            }
+            return Matrix2f::Zero();
+        }
+
+        static inline Matrix2f safe_inverse_transpose(const Matrix2f& m) {
+            return safe_inverse(m.transpose());
+        }
+
+        static inline AnkleRpMapping map_theta_to_rp(
+            float theta_upper, float theta_lower,
+            float theta_vel_upper, float theta_vel_lower,
+            float theta_tau_upper, float theta_tau_lower,
+            char side) {
+            AnkleRpMapping out;
+            std::tie(out.rp, out.jac) = kin_2rsu::ankle_fk(theta_upper, theta_lower, side);
+            const Vector2f theta_vel(theta_vel_upper, theta_vel_lower);
+            const Vector2f theta_tau(theta_tau_upper, theta_tau_lower);
+            out.rp_vel = out.jac * theta_vel;
+            out.rp_tau = safe_inverse_transpose(out.jac) * theta_tau;
+            return out;
+        }
+
+        static inline AnkleThetaMapping map_rp_to_theta(
+            float rp_r, float rp_p,
+            float rp_vel_r, float rp_vel_p,
+            float rp_tau_r, float rp_tau_p,
+            char side) {
+            AnkleThetaMapping out;
+            out.theta = kin_2rsu::ankle_ik(rp_r, rp_p, side);
+            out.jac = kin_2rsu::ankle_J(rp_r, rp_p, out.theta(0), out.theta(1), side);
+            const Vector2f rp_vel(rp_vel_r, rp_vel_p);
+            const Vector2f rp_tau(rp_tau_r, rp_tau_p);
+            out.theta_vel = safe_inverse(out.jac) * rp_vel;
+            out.theta_tau = out.jac.transpose() * rp_tau;
+            return out;
+        }
 
         DataWriter<bool> dw_state{"can0_state", ArchiveOption::Enable};
             
@@ -465,6 +596,7 @@ namespace task_pool {
         bool motor_sync_[6] = {false,}; // 피드백 기반 동기화 완료 여부
         bool link_initialized = false;
         bool restart_required = false;
+        std::array<double, 6> joint_feedback_pos_{};
 
         std::array<MotorCommand, 6> cmds;
         std::vector<std::shared_ptr<Motor>> motors = {
@@ -472,8 +604,8 @@ namespace task_pool {
             std::make_shared<RmdX6P36>(0x02), // hip_roll_left
             std::make_shared<RmdX6P36>(0x03), // hip_pitch_left
             std::make_shared<RmdX6P36>(0x04), // knee_left
-            std::make_shared<RobStride03>(0x05), // ankle_pitch_left
-            std::make_shared<RobStride03>(0x06), // ankle_roll_left
+            std::make_shared<RobStride03>(0x05), // ankle_upper_left
+            std::make_shared<RobStride03>(0x06), // ankle_lower_left
         };
 
     };

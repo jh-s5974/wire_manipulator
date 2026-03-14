@@ -3,6 +3,7 @@
 #include <rtfw/task.h>
 #include "custom_types.hpp"
 #include "util.hpp"
+#include "kin_2rsu.hpp"
 
 #include <GLFW/glfw3.h>
 #include <mujoco/mujoco.h>
@@ -545,6 +546,65 @@ private:
             dw_mtr_stat_[i].write(state);
         }
 
+        // 가상 ankle upper/lower cmd_applied/state 발행 (실제 제어는 pitch/roll)
+        auto publish_virtual_ankle_side =
+            [&](int pitch_idx, int roll_idx, int upper_writer_idx, int lower_writer_idx, char side) {
+                const auto cmd_map = map_rp_to_theta(
+                    static_cast<float>(des_pos_[pitch_idx]),
+                    static_cast<float>(des_pos_[roll_idx]),
+                    static_cast<float>(des_vel_[pitch_idx]),
+                    static_cast<float>(des_vel_[roll_idx]),
+                    static_cast<float>(ff_tau_[pitch_idx]),
+                    static_cast<float>(ff_tau_[roll_idx]),
+                    side);
+
+                custom_types::MotorCmd upper_cmd{};
+                upper_cmd.pos = motor_on_[pitch_idx] ? cmd_map.theta(0) : 0.0;
+                upper_cmd.vel = motor_on_[pitch_idx] ? cmd_map.theta_vel(0) : 0.0;
+                upper_cmd.torque = motor_on_[pitch_idx] ? cmd_map.theta_tau(0) : 0.0;
+                upper_cmd.kp = motor_on_[pitch_idx] ? kp_vec_[pitch_idx] : 0.0;
+                upper_cmd.kd = motor_on_[pitch_idx] ? kd_vec_[pitch_idx] : 0.0;
+                dw_mtr_cmd_[upper_writer_idx].write(upper_cmd);
+
+                custom_types::MotorCmd lower_cmd{};
+                lower_cmd.pos = motor_on_[roll_idx] ? cmd_map.theta(1) : 0.0;
+                lower_cmd.vel = motor_on_[roll_idx] ? cmd_map.theta_vel(1) : 0.0;
+                lower_cmd.torque = motor_on_[roll_idx] ? cmd_map.theta_tau(1) : 0.0;
+                lower_cmd.kp = motor_on_[roll_idx] ? kp_vec_[roll_idx] : 0.0;
+                lower_cmd.kd = motor_on_[roll_idx] ? kd_vec_[roll_idx] : 0.0;
+                dw_mtr_cmd_[lower_writer_idx].write(lower_cmd);
+
+                const auto state_map = map_rp_to_theta(
+                    static_cast<float>(q[pitch_idx]),
+                    static_cast<float>(q[roll_idx]),
+                    static_cast<float>(dq[pitch_idx]),
+                    static_cast<float>(dq[roll_idx]),
+                    static_cast<float>(data_->ctrl[actuator_indices_[pitch_idx]]),
+                    static_cast<float>(data_->ctrl[actuator_indices_[roll_idx]]),
+                    side);
+
+                custom_types::MotorState upper_state{};
+                upper_state.pos = state_map.theta(0);
+                upper_state.vel = state_map.theta_vel(0);
+                upper_state.torque = state_map.theta_tau(0);
+                upper_state.temp = 0.0;
+                upper_state.status = motor_on_[pitch_idx] ? 0 : 1;
+                upper_state.enabled = motor_on_[pitch_idx];
+                dw_mtr_stat_[upper_writer_idx].write(upper_state);
+
+                custom_types::MotorState lower_state{};
+                lower_state.pos = state_map.theta(1);
+                lower_state.vel = state_map.theta_vel(1);
+                lower_state.torque = state_map.theta_tau(1);
+                lower_state.temp = 0.0;
+                lower_state.status = motor_on_[roll_idx] ? 0 : 1;
+                lower_state.enabled = motor_on_[roll_idx];
+                dw_mtr_stat_[lower_writer_idx].write(lower_state);
+            };
+
+        publish_virtual_ankle_side(8, 10, 12, 14, 'l');
+        publish_virtual_ankle_side(9, 11, 13, 15, 'r');
+
         const Eigen::Quaterniond quat = get_base_quat();
         const Eigen::Vector3d base_ang_vel = get_base_ang_vel_body();
         const Eigen::Vector3d base_vel = get_base_vel_body();
@@ -586,6 +646,35 @@ private:
         }
 
         throw std::runtime_error("MuJoCo model file not found: " + raw_path);
+    }
+
+    struct AnkleThetaMapping {
+        Eigen::Vector2f theta = Eigen::Vector2f::Zero();
+        Eigen::Matrix2f jac = Eigen::Matrix2f::Zero();
+        Eigen::Vector2f theta_vel = Eigen::Vector2f::Zero();
+        Eigen::Vector2f theta_tau = Eigen::Vector2f::Zero();
+    };
+
+    static inline Eigen::Matrix2f safe_inverse_2x2(const Eigen::Matrix2f& m) {
+        if (std::abs(m.determinant()) > 1e-6f) {
+            return m.inverse();
+        }
+        return Eigen::Matrix2f::Zero();
+    }
+
+    static inline AnkleThetaMapping map_rp_to_theta(
+        float rp_r, float rp_p,
+        float rp_vel_r, float rp_vel_p,
+        float rp_tau_r, float rp_tau_p,
+        char side) {
+        AnkleThetaMapping out;
+        out.theta = kin_2rsu::ankle_ik(rp_r, rp_p, side);
+        out.jac = kin_2rsu::ankle_J(rp_r, rp_p, out.theta(0), out.theta(1), side);
+        const Eigen::Vector2f rp_vel(rp_vel_r, rp_vel_p);
+        const Eigen::Vector2f rp_tau(rp_tau_r, rp_tau_p);
+        out.theta_vel = safe_inverse_2x2(out.jac) * rp_vel;
+        out.theta_tau = out.jac.transpose() * rp_tau;
+        return out;
     }
 
 private:

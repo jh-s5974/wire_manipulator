@@ -78,11 +78,46 @@ const JOINT_LIMITS: Record<string, JointLimits> = {
   ankle_pitch_right: { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
   ankle_roll_left:   { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
   ankle_roll_right:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_upper_left:  { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_upper_right: { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_lower_left:  { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  ankle_lower_right: { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
 };
 
-const PLACEHOLDER_MOTORS: MotorState[] = Array.from({ length: 12 }, (_, id) => ({
+const MOTOR_NAMES: string[] = [
+  "hip_yaw_left",
+  "hip_yaw_right",
+  "hip_roll_left",
+  "hip_roll_right",
+  "hip_pitch_left",
+  "hip_pitch_right",
+  "knee_left",
+  "knee_right",
+  "ankle_pitch_left",
+  "ankle_pitch_right",
+  "ankle_roll_left",
+  "ankle_roll_right",
+  "ankle_upper_left",
+  "ankle_upper_right",
+  "ankle_lower_left",
+  "ankle_lower_right",
+];
+
+const NON_CONTROLLABLE_MOTOR_NAMES = new Set<string>([
+  "ankle_upper_left",
+  "ankle_upper_right",
+  "ankle_lower_left",
+  "ankle_lower_right",
+]);
+
+function isMotorControlEnabled(name?: string) {
+  if (!name) return true;
+  return !NON_CONTROLLABLE_MOTOR_NAMES.has(name);
+}
+
+const PLACEHOLDER_MOTORS: MotorState[] = MOTOR_NAMES.map((name, id) => ({
   id,
-  name: `motor_${id}`,
+  name,
   mode: "N/A",
   position: 0,
   velocity: 0,
@@ -917,6 +952,8 @@ function App() {
   const handleMotorSendById = React.useCallback(
     (motorId: number) => {
       if (!state) return;
+      const motor = state.motors.find((m) => m.id === motorId);
+      if (!motor || !isMotorControlEnabled(motor.name)) return;
       const cmd = motorCommands[motorId];
       if (!cmd) return;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
@@ -936,7 +973,7 @@ function App() {
     (motorId: number) => {
       if (!state) return;
       const motor = state.motors.find((m) => m.id === motorId);
-      if (!motor) return;
+      if (!motor || !isMotorControlEnabled(motor.name)) return;
       sendMotorPower(motorId, !(motor.enabled ?? false));
     },
     [state, sendMotorPower],
@@ -945,17 +982,20 @@ function App() {
   // === 선택 / 일괄 입력 ===
 
   const handleToggleSelectMotor = React.useCallback((motorId: number) => {
+    const motor = state?.motors.find((m) => m.id === motorId);
+    if (motor && !isMotorControlEnabled(motor.name)) return;
     setSelectedMotorIds((prev) => {
       const next = new Set(prev);
       if (next.has(motorId)) next.delete(motorId);
       else next.add(motorId);
       return next;
     });
-  }, []);
+  }, [state]);
 
   const handleToggleSelectAll = React.useCallback(() => {
     setSelectedMotorIds((prev) => {
-      const allIds = state?.motors.map((m) => m.id) ?? [];
+      const allIds =
+        state?.motors.filter((m) => isMotorControlEnabled(m.name)).map((m) => m.id) ?? [];
       if (allIds.length > 0 && allIds.every((id) => prev.has(id))) {
         return new Set();
       }
@@ -967,6 +1007,10 @@ function App() {
     setMotorCommands((prev) => {
       const next = { ...prev };
       for (const motorId of selectedMotorIds) {
+        const motor = state?.motors.find((m) => m.id === motorId);
+        if (motor && !isMotorControlEnabled(motor.name)) {
+          continue;
+        }
         const cur = next[motorId] ?? EMPTY_MOTOR_COMMAND;
         next[motorId] = {
           position:   bulkCmd.position   !== "" ? bulkCmd.position   : cur.position,
@@ -986,6 +1030,8 @@ function App() {
     for (const motorId of selectedMotorIds) {
       const cmd = motorCommands[motorId];
       if (!cmd) continue;
+      const motor = state.motors.find((m) => m.id === motorId);
+      if (!motor || !isMotorControlEnabled(motor.name)) continue;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
       sendMotorCommand(motorId, {
         position: parseNumberOrUndefined(cmd.position),
@@ -1006,6 +1052,7 @@ function App() {
     setMotorCommands((prev) => {
       const next: Record<number, MotorCommandFields> = { ...prev };
       for (const m of state.motors) {
+        if (!isMotorControlEnabled(m.name)) continue;
         next[m.id] = {
           ...(next[m.id] ?? makeInitialCommand(m)),
           position: formatCommandValue(m.command_position ?? m.position, "position", next[m.id]?.position ?? "0.00"),
@@ -1033,6 +1080,7 @@ function App() {
   const handleAllSend = () => {
     if (!state) return;
     for (const m of state.motors) {
+      if (!isMotorControlEnabled(m.name)) continue;
       const cmd = motorCommands[m.id];
       if (!cmd) continue;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
@@ -1048,11 +1096,19 @@ function App() {
   };
 
   const handleAllOn = () => {
-    sendMotorPower("all", true);
+    if (!state) return;
+    for (const m of state.motors) {
+      if (!isMotorControlEnabled(m.name)) continue;
+      sendMotorPower(m.id, true);
+    }
   };
 
   const handleAllOff = () => {
-    sendMotorPower("all", false);
+    if (!state) return;
+    for (const m of state.motors) {
+      if (!isMotorControlEnabled(m.name)) continue;
+      sendMotorPower(m.id, false);
+    }
   };
 
   const handleRequestControl = () => {
@@ -1291,6 +1347,14 @@ function App() {
     () => state?.motors ?? PLACEHOLDER_MOTORS,
     [state],
   );
+  const controlMotors = React.useMemo<MotorState[]>(
+    () => displayMotors.filter((m) => isMotorControlEnabled(m.name)),
+    [displayMotors],
+  );
+  const selectedControlMotorCount = React.useMemo(
+    () => controlMotors.filter((m) => selectedMotorIds.has(m.id)).length,
+    [controlMotors, selectedMotorIds],
+  );
 
   // 로봇에서 직접 받은 joint_states 사용 (없으면 빈 객체)
   const urdfJointState = React.useMemo<JointState>(
@@ -1518,10 +1582,10 @@ function App() {
             <button
               className="btn btn-primary btn-xs"
               onClick={handleSendSelected}
-              disabled={!canControl || selectedMotorIds.size === 0}
-              title={selectedMotorIds.size === 0 ? "모터를 선택하세요" : `${selectedMotorIds.size}개 모터에 전송`}
+              disabled={!canControl || selectedControlMotorCount === 0}
+              title={selectedControlMotorCount === 0 ? "모터를 선택하세요" : `${selectedControlMotorCount}개 모터에 전송`}
             >
-              Send Sel ({selectedMotorIds.size})
+              Send Sel ({selectedControlMotorCount})
             </button>
             <button className="btn btn-secondary btn-xxs" onClick={handleAllOn} disabled={!canControl}>
               On All
@@ -1607,13 +1671,13 @@ function App() {
                           <input
                             type="checkbox"
                             checked={
-                              displayMotors.length > 0 &&
-                              displayMotors.every((m) => selectedMotorIds.has(m.id))
+                              controlMotors.length > 0 &&
+                              controlMotors.every((m) => selectedMotorIds.has(m.id))
                             }
                             ref={(el) => {
                               if (el) {
-                                const some = displayMotors.some((m) => selectedMotorIds.has(m.id));
-                                const all  = displayMotors.length > 0 && displayMotors.every((m) => selectedMotorIds.has(m.id));
+                                const some = controlMotors.some((m) => selectedMotorIds.has(m.id));
+                                const all  = controlMotors.length > 0 && controlMotors.every((m) => selectedMotorIds.has(m.id));
                                 el.indeterminate = some && !all;
                               }
                             }}
@@ -1650,15 +1714,15 @@ function App() {
                             <button
                               className="btn btn-primary btn-xs"
                               onClick={handleBulkApply}
-                              disabled={!canControl || selectedMotorIds.size === 0}
-                              title={selectedMotorIds.size === 0 ? "모터를 선택하세요" : `${selectedMotorIds.size}개 모터에 적용`}
+                              disabled={!canControl || selectedControlMotorCount === 0}
+                              title={selectedControlMotorCount === 0 ? "모터를 선택하세요" : `${selectedControlMotorCount}개 모터에 적용`}
                             >
-                              Apply ({selectedMotorIds.size})
+                              Apply ({selectedControlMotorCount})
                             </button>
                           </div>
                         </td>
                       </tr>
-                      {displayMotors.map((m) => {
+                      {controlMotors.map((m) => {
                         const powered = hasStateData ? (m.enabled ?? false) : false;
                         return (
                           <MotorCommandRow
