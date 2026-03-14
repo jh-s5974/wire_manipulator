@@ -72,11 +72,13 @@ struct BridgeState {
 
     struct RobotModeSnapshot {
         std::string current = "IDLE";
+        bool walk_ready = false;
     } robot_mode;
 
     struct SafetySnapshot {
         std::string level = "ESSENTIAL";
         bool locked = false;
+        bool restoring = false;
     } safety;
 
     std::vector<MotorSnapshot> motors;
@@ -123,8 +125,8 @@ inline void to_json(json& j, const ImuSnapshot& imu) {
 inline void to_json(json& j, const BridgeState& s) {
     j = json{
         {"control", {{"requested", s.control.requested}, {"granted", s.control.granted}}},
-        {"robot_mode", {{"current", s.robot_mode.current}}},
-        {"safety", {{"level", s.safety.level}, {"locked", s.safety.locked}}},
+        {"robot_mode", {{"current", s.robot_mode.current}, {"walk_ready", s.robot_mode.walk_ready}}},
+        {"safety", {{"level", s.safety.level}, {"locked", s.safety.locked}, {"restoring", s.safety.restoring}}},
         {"motors", s.motors},
         {"imu", s.imu},
         {"joint_states", s.joint_states}
@@ -334,6 +336,11 @@ private:
         app_ = std::make_unique<uWS::App>();
 
         app_->ws<PerSocketData>("/*", {
+            .compression = uWS::DISABLED,
+            .maxPayloadLength = 16 * 1024,
+            .idleTimeout = 10,           // 10초 동안 PONG 없으면 연결 강제 종료 (uWS 제약: 0 또는 >=9)
+            .maxBackpressure = 1 * 1024 * 1024,
+            .sendPingsAutomatically = true, // 브라우저에 WebSocket PING 자동 전송
             .upgrade = nullptr,
             .open = [this](auto* ws) {
                 // 첫 연결

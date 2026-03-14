@@ -636,6 +636,7 @@ function App() {
     sendRobotModeRequest,
     sendSafetyReset,
     retryAuth,
+    manualConnect,
   } = useRobotWs({
     url: WS_URL,
     password: wsPassword,
@@ -1153,6 +1154,8 @@ function App() {
   const currentRobotMode: RobotMode = state?.robot_mode?.current ?? "IDLE";
   const currentSafetyLevel = state?.safety?.level ?? "ESSENTIAL";
   const safetyLocked = state?.safety?.locked ?? false;
+  const safetyRestoring = state?.safety?.restoring ?? false;
+  const walkReady = state?.robot_mode?.walk_ready ?? false;
 
   const addPlotPanel = () => {
     const nextId = nextPlotIdRef.current;
@@ -1409,10 +1412,14 @@ function App() {
             ))}
           </div>
           <div className="top-connection">
+            <span className={`status-dot ${walkReady ? "dot-ok" : "dot-inactive"}`} />
+            Walk Ready
+          </div>
+          <div className="top-connection">
             SAFETY:
             <span>{currentSafetyLevel}</span>
-            <span className={safetyLocked ? "text-bad" : "text-ok"}>
-              {safetyLocked ? "LOCK" : "UNLOCK"}
+            <span className={safetyLocked ? "text-bad" : safetyRestoring ? "text-warn" : "text-ok"}>
+              {safetyLocked ? "LOCK" : safetyRestoring ? "RESTORE" : "UNLOCK"}
             </span>
             <button
               className="btn btn-secondary btn-xs"
@@ -1424,9 +1431,19 @@ function App() {
           </div>
           <div className="top-connection">
             연결 상태:
-            <span className={connected ? "text-ok" : "text-bad"}>
-              {connected ? "Connected" : "Disconnected"}
-            </span>
+            {connected ? (
+              <span className="text-ok">Connected</span>
+            ) : (
+              <>
+                <span className="text-bad">Disconnected</span>
+                <button
+                  className="btn btn-secondary btn-xs"
+                  onClick={manualConnect}
+                >
+                  연결
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

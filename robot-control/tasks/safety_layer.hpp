@@ -92,6 +92,14 @@ public:
                 s.mode = Mode::RESTORE;
                 s.restore_enter_tick = getExecutionLocalTick();
                 getLogger()->info("[{}] Received reset signal, attempting to restore from LOCK mode", getName());
+
+
+                for (int i=0; i<12; i++) {
+                    // const custom_types::MotorCmd cmd = blend_cmd(make_zero_cmd(), s.manager_cmd[i], ratio);
+                    custom_types::MotorCmd cmd = s.manager_cmd[i];
+                    cmd.duration_ms = p_restore_duration_sec.read() * 1000;
+                    dw_mtr_cmd_[i].write(clamp_cmd(cmd));
+                }
             }
         });
 
@@ -183,6 +191,7 @@ public:
                     lock_cmd.torque = 0.0;
                     lock_cmd.kp = p_lock_kp.read();
                     lock_cmd.kd = p_lock_kd.read();
+                    lock_cmd.duration_ms = 0.0; // 진행 중인 모터단 interpolation 즉시 취소
                     dw_mtr_cmd_[i].write(lock_cmd);
                 }
                 break;
@@ -197,15 +206,18 @@ public:
                     s.mode = Mode::MANUAL;
                     getLogger()->info("[{}] Restore complete, switching to MANUAL mode", getName());
                 }
-                for (int i=0; i<12; i++) {
-                    const custom_types::MotorCmd cmd = blend_cmd(make_zero_cmd(), s.manager_cmd[i], ratio);
-                    dw_mtr_cmd_[i].write(clamp_cmd(cmd));
-                }
+                // for (int i=0; i<12; i++) {
+                //     // const custom_types::MotorCmd cmd = blend_cmd(make_zero_cmd(), s.manager_cmd[i], ratio);
+                //     custom_types::MotorCmd cmd = s.manager_cmd[i];
+                //     cmd.duration_ms = p_restore_duration_sec.read() * 1000;
+                //     dw_mtr_cmd_[i].write(clamp_cmd(cmd));
+                // }
                 break;
             }
         }
 
         dw_lock_state_.write(s.mode == Mode::LOCK);
+        dw_restore_state_.write(s.mode == Mode::RESTORE);
     }
 
 
@@ -214,8 +226,9 @@ private:
     DataReader<int> dr_safety_level_{"manager/safety_level", DependencyType::Weak};
     DataReader<rt::Signal> dr_reset{"manager/reset_signal", DependencyType::Weak};
     DataWriter<bool> dw_lock_state_{"safety/lock_state"};
+    DataWriter<bool> dw_restore_state_{"safety/restore_state"};
 
-    Parameter<double> p_restore_duration_sec{"safety_layer.restore_duration_sec", 3.0};
+    Parameter<double> p_restore_duration_sec{"safety_layer.restore_duration_sec", 10.0};
     Parameter<double> p_cmd_timeout_sec{"safety_layer.cmd_timeout_sec", 1.0};
     Parameter<double> p_state_timeout_sec{"safety_layer.state_timeout_sec", 1.0};
     Parameter<double> p_imu_timeout_sec{"safety_layer.imu_timeout_sec", 1.0};
@@ -224,7 +237,7 @@ private:
         {-0.698132, -1.5708, -0.698132, -1.5708, -1.8326, -1.8326, 0.0, 0.0, -1.22173, -1.22173, -0.663225, -0.523599}};
     Parameter<std::vector<double>> p_joint_pos_limit_upper{"safety_layer.joint_pos_limit_upper",
         {1.5708, 0.698132, 1.5708, 0.872665, 0.523599, 0.523599, 2.1293, 2.1293, 1.0472, 1.0472, 0.523599, 0.663225}};
-    Parameter<double> p_joint_vel_limit{"safety_layer.joint_vel_limit", 20.0};
+    Parameter<double> p_joint_vel_limit{"safety_layer.joint_vel_limit", 60.0};
     Parameter<double> p_joint_torque_limit{"safety_layer.joint_torque_limit", 60.0};
     Parameter<double> p_joint_temp_limit_c{"safety_layer.joint_temp_limit_c", 95.0};
 
@@ -346,6 +359,8 @@ private:
         out.torque = std::clamp(sanitize(in.torque), -p_cmd_torque_limit.read(), p_cmd_torque_limit.read());
         out.kp = std::clamp(sanitize(in.kp), 0.0, p_cmd_kp_limit.read());
         out.kd = std::clamp(sanitize(in.kd), 0.0, p_cmd_kd_limit.read());
+        // duration_ms는 모터단 interpolation을 위해 그대로 전달
+        out.duration_ms = (std::isfinite(in.duration_ms) && in.duration_ms >= 0.0) ? in.duration_ms : 0.0;
         return out;
     }
 

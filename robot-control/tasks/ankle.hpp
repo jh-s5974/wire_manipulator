@@ -109,10 +109,10 @@ private:
     custom_types::MotorState motor_state_[4];  // ll[0], lr[1], rl[2], rr[3]
 
     DataReader<custom_types::MotorCmd> dr_motor_cmd[4] = {
-        DataReader<custom_types::MotorCmd>{"ankle_ll/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_lr/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_rl/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_rr/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd"},
     };
 
     DataWriter<custom_types::MotorCmd> dw_joint_cmd_[4] = {
@@ -123,10 +123,10 @@ private:
     };
 
     DataReader<custom_types::MotorState> dr_mtr_stat_[4] = {
-        DataReader<custom_types::MotorState>{"ankle_ll/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_lr/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_rl/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_rr/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"ankle_upper_left/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"ankle_upper_right/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"ankle_lower_left/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"ankle_lower_right/state", DependencyType::Weak},
     };
 
     DataWriter<custom_types::MotorState> dw_joint_stat_[4] = {
@@ -253,10 +253,10 @@ private:
     };
 
     DataWriter<custom_types::MotorCmd> dw_motor_cmd[4] = {
-        DataWriter<custom_types::MotorCmd>{"ankle_ll/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_lr/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_rl/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_rr/cmd"},
+        DataWriter<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
+        DataWriter<custom_types::MotorCmd>{"ankle_upper_right/cmd"},
+        DataWriter<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
+        DataWriter<custom_types::MotorCmd>{"ankle_lower_right/cmd"},
     };
 
     DataReader<custom_types::MotorState> dr_joint_stat_[4] = {
@@ -267,10 +267,10 @@ private:
     };
 
     DataWriter<custom_types::MotorState> dw_motor_stat_[4] = {
-        DataWriter<custom_types::MotorState>{"ankle_ll/state", DependencyType::Weak},
-        DataWriter<custom_types::MotorState>{"ankle_lr/state", DependencyType::Weak},
-        DataWriter<custom_types::MotorState>{"ankle_rl/state", DependencyType::Weak},
-        DataWriter<custom_types::MotorState>{"ankle_rr/state", DependencyType::Weak},
+        DataWriter<custom_types::MotorState>{"ankle_upper_left/state", DependencyType::Weak},
+        DataWriter<custom_types::MotorState>{"ankle_upper_right/state", DependencyType::Weak},
+        DataWriter<custom_types::MotorState>{"ankle_lower_left/state", DependencyType::Weak},
+        DataWriter<custom_types::MotorState>{"ankle_lower_right/state", DependencyType::Weak},
     };
 };
 

@@ -52,11 +52,13 @@ export type RobotMode = "IDLE" | "MANU" | "READY" | "RL WALK";
 
 export interface RobotModeState {
   current: RobotMode;
+  walk_ready?: boolean;
 }
 
 export interface SafetyState {
   level: "ESSENTIAL" | "STRICT" | string;
   locked: boolean;
+  restoring?: boolean;
 }
 
 export interface StatePayload {

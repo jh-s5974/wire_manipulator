@@ -25,8 +25,10 @@ export function useRobotWs({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const connectTimeoutRef = useRef<number | null>(null);
+  const stateWatchdogRef = useRef<number | null>(null);
   const connectionIdRef = useRef(0);
   const passwordRef = useRef((password ?? "").trim());
+  const manualConnectRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     passwordRef.current = (password ?? "").trim();
@@ -150,6 +152,23 @@ export function useRobotWs({
       }
     };
 
+    const clearStateWatchdog = () => {
+      if (stateWatchdogRef.current !== null) {
+        clearTimeout(stateWatchdogRef.current);
+        stateWatchdogRef.current = null;
+      }
+    };
+
+    const STATE_WATCHDOG_MS = 5000;
+    const armStateWatchdog = (ws: WebSocket, connectionId: number) => {
+      clearStateWatchdog();
+      stateWatchdogRef.current = window.setTimeout(() => {
+        if (disposed || wsRef.current !== ws || connectionIdRef.current !== connectionId) return;
+        console.warn(`No state received for ${STATE_WATCHDOG_MS}ms, forcing reconnect`);
+        ws.close();
+      }, STATE_WATCHDOG_MS);
+    };
+
     const scheduleReconnect = () => {
       if (!autoReconnect || disposed) {
         return;
@@ -186,6 +205,7 @@ export function useRobotWs({
           payload: { rate: 10 },
         };
         ws.send(JSON.stringify(msg));
+        armStateWatchdog(ws, connectionId);
       };
 
       ws.onopen = () => {
@@ -211,6 +231,7 @@ export function useRobotWs({
         }
 
         clearConnectTimeout();
+        clearStateWatchdog();
         wsRef.current = null;
         setConnected(false);
         scheduleReconnect();
@@ -249,6 +270,7 @@ export function useRobotWs({
           } else if (msg.type === "state") {
             const stateMsg = msg as StateMessage;
             setState(stateMsg.payload);
+            armStateWatchdog(ws, connectionId);
           } else {
             console.debug("Unhandled message", msg);
           }
@@ -258,12 +280,14 @@ export function useRobotWs({
       };
     }
 
+    manualConnectRef.current = connect;
     connect();
 
     return () => {
       disposed = true;
       clearReconnectTimer();
       clearConnectTimeout();
+      clearStateWatchdog();
       if (wsRef.current) {
         const active = wsRef.current;
         wsRef.current = null;
@@ -277,6 +301,16 @@ export function useRobotWs({
     };
   }, [url, autoReconnect, password, reconnectIntervalMs, connectTimeoutMs]);
 
+  const manualConnect = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    // cancel pending auto-reconnect, then connect immediately
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    manualConnectRef.current?.();
+  };
+
   return {
     connected,
     state,
@@ -289,5 +323,6 @@ export function useRobotWs({
     sendSafetyReset,
     sendRaw,
     retryAuth,
+    manualConnect,
   };
 }

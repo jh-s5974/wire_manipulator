@@ -56,15 +56,6 @@ namespace task_pool {
         std::array<bool, 12> gui_motor_on{};
         std::array<bool, 12> gui_motor_on_online{};
 
-        struct MotorInterpState {
-            bool active = false;
-            double start_ms = 0.0;
-            double duration_ms = 0.0;
-            double start_pos = 0.0;
-            custom_types::MotorCmd target_cmd{};
-        };
-        std::array<MotorInterpState, 12> gui_motor_interp{};
-        std::array<bool, 12> gui_motor_cmd_new{};
 
         struct {
             uint64_t motor[12];
@@ -104,8 +95,6 @@ namespace task_pool {
             s.gui_mode_request_online = false;
             s.gui_motor_cmd_online.fill(false);
             s.gui_motor_on_online.fill(false);
-            for (auto i = 0; i < 12; i++) s.gui_motor_interp[i] = {};
-            s.gui_motor_cmd_new.fill(false);
             s.gui_motor_on.fill(true);
 
 
@@ -121,8 +110,6 @@ namespace task_pool {
         }
 
         void execute(ManagerState& s) override {
-
-            for (auto i = 0; i < 12; i++) s.gui_motor_cmd_new[i] = false;
 
             for (auto i=0; i<12; i++) {
                 dr_mtr_stat[i].on_update([&, i](const custom_types::MotorState& data) {
@@ -158,7 +145,6 @@ namespace task_pool {
                 dr_gui_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
                     s.gui_motor_cmd[i] = data;
                     s.gui_motor_cmd_online[i] = true;
-                    s.gui_motor_cmd_new[i] = true;
                 });
 
                 dr_gui_motor_on[i].on_update([&, i](const bool& on) {
@@ -253,6 +239,7 @@ namespace task_pool {
 
             dw_gui_mode_current.write(gui_mode_from_state(s.state_));
             dw_safety_level.write(safety_level_from_state(s.state_));
+            dw_walk_ready.write(s.robot_state.walk_ready);
 
             s.robot_state.tick_ms = getExecutionLocalTick()*1000.0/getFrequency();
             PERIODIC_CALL(
@@ -349,6 +336,7 @@ namespace task_pool {
     DataWriter<bool> dw_gui_control_requested{"gui/motor/control_requested"};
     DataWriter<bool> dw_gui_control_granted{"gui/motor/control_granted"};
     DataWriter<int> dw_gui_mode_current{"gui/robot/mode_current"};
+    DataWriter<bool> dw_walk_ready{"manager/walk_ready"};
     DataWriter<int> dw_safety_level{"manager/safety_level"};
     DataWriter<manif::SE2Tangentd> dw_cmd_vel{"manager/cmd_vel"};
     DataWriter<bool> dw_rl_signal{"manager/rl_signal"};
@@ -427,53 +415,50 @@ namespace task_pool {
 
         void task_ready(ManagerState& s) {
             auto& joint_names = p_joint_names.read();
+            auto& joint_target_positions = p_default_joint_positions.read();
+            auto& joint_kp = p_joint_kp.read();
+            auto& joint_kd = p_joint_kd.read();
+            const double duration_ms = 5000.0;
 
             dw_cmd_vel.write(manif::SE2Tangentd(0, 0, 0));
 
-
-
             static int start_tick;
-            static std::vector<double> init_q;
             if (s.state_ != s.prev_state_) {
                 s.robot_state.walk_ready = false;
                 s.robot_state.req_rl_control = false;
                 dw_rl_signal.write(false); // RL 제어 시작 신호 (false)
-                getLogger()->info("[{}] READY state. Initializing joint positions...", getName());
+                getLogger()->info("[{}] READY state. Moving joints to default positions...", getName());
                 start_tick = s.robot_state.tick_ms;
-                init_q.clear();
-                for (auto i=0; i<joint_names.size(); i++) {
-                    init_q.push_back(s.robot_state.motor[i].pos);
+
+
+
+                // duration_ms를 명령에 포함해서 모터단이 현재 ref 기준으로 interpolation 수행
+                for (auto i=0; i<12; i++) {
+                    custom_types::MotorCmd mtr_cmd;
+                    strncpy(mtr_cmd.name, joint_names[i].c_str(), joint_names[i].size()+1);
+                    mtr_cmd.pos = joint_target_positions[i];// * 0.3;
+                    mtr_cmd.vel = 0.0;
+                    mtr_cmd.torque = 0.0;
+                    // mtr_cmd.kp = joint_kp[i];
+                    // mtr_cmd.kd = joint_kd[i];
+                    mtr_cmd.kp = 500.0;
+                    mtr_cmd.kd = 30.0;
+                    mtr_cmd.duration_ms = duration_ms;
+
+                    dw_mtr_cmd[i].write(mtr_cmd);
                 }
             }
 
-            auto& joint_target_positions = p_default_joint_positions.read();
-            auto& joint_kp = p_joint_kp.read();
-            auto& joint_kd = p_joint_kd.read();
 
-            double duration_ms = 3000.0; // 3 seconds
-            double ratio = (s.robot_state.tick_ms - start_tick) / duration_ms;
-            ratio = std::min(std::max(ratio, 0.0), 1.0); // Clamp ratio to [0, 1]
-            for (auto i=0; i<12; i++) {
-                custom_types::MotorCmd mtr_cmd;
-                strncpy(mtr_cmd.name, joint_names[i].c_str(), joint_names[i].size()+1);
-                mtr_cmd.pos = init_q[i] * (1-ratio) + joint_target_positions[i]*0.3 * ratio;
-                mtr_cmd.vel = 0.0;
-                mtr_cmd.torque = 0.0;
-                mtr_cmd.kp = joint_kp[i];
-                mtr_cmd.kd = joint_kd[i];
-
-                dw_mtr_cmd[i].write(mtr_cmd);
+            double max_err = 0;
+            for (auto i=0; i<joint_names.size(); i++) {
+                double err = std::abs(s.robot_state.motor[i].pos - joint_target_positions[i]);
+                if (err > max_err) {
+                    max_err = err;
+                }
             }
 
-            // double max_err = 0;
-            // for (auto i=0; i<cfg_.joint_names.size(); i++) {
-            //     double err = std::abs(s.robot_state.q[i] - joint_zero_positions[i]);
-            //     if (err > max_err) {
-            //         max_err = err;
-            //     }
-            // }
-
-            // if (s.robot_state.tick_ms - start_tick > duration_ms && max_err < 0.1) { // 3 second delay
+            // if (s.robot_state.tick_ms - start_tick > duration_ms && max_err < 0.2) { // 3 second delay
             if (s.robot_state.tick_ms - start_tick > duration_ms) { // 3 second delay
                 // getLogger()->info("Transitioning to READY state.");
                 // state_commit(s, State::READY);
@@ -483,13 +468,14 @@ namespace task_pool {
             }
 
             if (s.robot_state.walk_ready) {
+                PERIODIC_CALL(
+                    getLogger()->info("[{}] Walk Ready", getName());
+                , 1s);
                 if (s.robot_state.req_rl_control) {
-                    getLogger()->info("Mode changed to: [Reinforcement Learning]");
+                    getLogger()->info("[{}] Mode changed to: [Reinforcement Learning]", getName());
                     state_commit(s, State::RL_WALK);
                     return;
                 }
-                
-
             }
 
 
@@ -516,7 +502,6 @@ namespace task_pool {
         void process_gui_command_bridge(ManagerState& s) {
             if (s.gui_control_granted && s.state_ != State::MANU) {
                 s.gui_control_granted = false;
-                for (int i = 0; i < 12; ++i) s.gui_motor_interp[i].active = false;
                 getLogger()->info("GUI motor control REVOKED (left MANU state)");
             }
 
@@ -554,35 +539,9 @@ namespace task_pool {
                 return;
             }
 
+            // duration_ms를 포함한 명령을 그대로 전달 - 모터단에서 interpolation 처리
             for (int i = 0; i < 12; ++i) {
-                if (s.gui_motor_cmd_new[i]) {
-                    s.gui_motor_cmd_new[i] = false;
-                    const auto& new_cmd = s.gui_motor_cmd[i];
-                    if (new_cmd.duration_ms > 0.0) {
-                        auto& interp = s.gui_motor_interp[i];
-                        interp.active = true;
-                        interp.start_ms = getExecutionLocalTick() * 1000.0 / getFrequency();
-                        interp.duration_ms = new_cmd.duration_ms;
-                        interp.start_pos = s.robot_state.motor[i].pos;
-                        interp.target_cmd = new_cmd;
-                    } else {
-                        s.gui_motor_interp[i].active = false;
-                    }
-                }
-
-                auto& interp = s.gui_motor_interp[i];
-                if (interp.active) {
-                    double current_ms = getExecutionLocalTick() * 1000.0 / getFrequency();
-                    double elapsed = current_ms - interp.start_ms;
-                    double ratio = std::min(elapsed / interp.duration_ms, 1.0);
-                    custom_types::MotorCmd cmd = interp.target_cmd;
-                    cmd.pos = interp.start_pos + ratio * (interp.target_cmd.pos - interp.start_pos);
-                    dw_mtr_cmd[i].write(cmd);
-                    if (ratio >= 1.0) {
-                        interp.active = false;
-                        s.gui_motor_cmd[i] = cmd;
-                    }
-                } else if (s.gui_motor_cmd_online[i]) {
+                if (s.gui_motor_cmd_online[i]) {
                     dw_mtr_cmd[i].write(s.gui_motor_cmd[i]);
                 }
             }

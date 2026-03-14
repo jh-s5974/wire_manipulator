@@ -138,30 +138,51 @@ public:
         for (int i = 0; i < 12; ++i) {
             dr_motor_on_[i].on_update([&, i](const bool& on) {
                 s.motor_on[i] = on;
-                // getLogger()->debug("[{}] Motor {} turned {}", getName(), joint_names_[i], on ? "ON" : "OFF");
             });
 
             dr_cmd_[i].on_update([&, i](const custom_types::MotorCmd& cmd) {
                 s.cmd[i] = cmd;
                 s.cmd_online[i] = true;
-                // getLogger()->debug("[{}] Received manager command for {}: pos={}, vel={}, torque={}, kp={}, kd={}",
-                //     getName(), joint_names_[i], cmd.pos, cmd.vel, cmd.torque, cmd.kp, cmd.kd);
+
+                auto itr = actuator_index_by_joint_name_.find(joint_names_[i]);
+                if (itr == actuator_index_by_joint_name_.end()) return;
+                const int act_idx = itr->second;
+
+                if (cmd.duration_ms > 0.0) {
+                    // 새 타겟이거나 처음 진입할 때만 interpolation 시작
+                    if (!cmd_interp_[i].active || std::abs(cmd.pos - cmd_interp_[i].target_pos) > 1e-4) {
+                        cmd_interp_[i].start_ref = data_->qpos[joint_qpos_adr_[i]]; // 실제 시뮬레이션 조인트 위치에서 시작
+                        cmd_interp_[i].target_pos = cmd.pos;
+                        cmd_interp_[i].duration_ms = cmd.duration_ms;
+                        cmd_interp_[i].elapsed_ms = 0.0;
+                        cmd_interp_[i].active = true;
+                    }
+                    // 같은 타겟이면 계속 진행
+                } else {
+                    // 즉시 명령: interpolation 취소, des_pos 즉시 갱신
+                    cmd_interp_[i].active = false;
+                    des_pos_[act_idx] = cmd.pos;
+                }
+                des_vel_[act_idx] = cmd.vel;
+                ff_tau_[act_idx] = cmd.torque;
+                kp_vec_[act_idx] = cmd.kp;
+                kd_vec_[act_idx] = cmd.kd;
             });
         }
 
+        // interpolation 진행: des_pos_를 현재 ref로 갱신
+        const double dt_ms = control_dt_ * 1000.0;
         for (int i = 0; i < 12; ++i) {
+            if (!cmd_interp_[i].active) continue;
             auto itr = actuator_index_by_joint_name_.find(joint_names_[i]);
-
-            if (itr == actuator_index_by_joint_name_.end()) {
-                getLogger()->error("[{}] Joint name '{}' not found in model. Skipping command for this joint.", getName(), s.cmd[i].name);
-                continue;
+            if (itr == actuator_index_by_joint_name_.end()) continue;
+            const int act_idx = itr->second;
+            cmd_interp_[i].elapsed_ms += dt_ms;
+            const double ratio = std::min(cmd_interp_[i].elapsed_ms / cmd_interp_[i].duration_ms, 1.0);
+            des_pos_[act_idx] = cmd_interp_[i].start_ref + ratio * (cmd_interp_[i].target_pos - cmd_interp_[i].start_ref);
+            if (ratio >= 1.0) {
+                cmd_interp_[i].active = false;
             }
-            int act_idx = itr->second;
-            des_pos_[act_idx] = s.cmd[i].pos;
-            des_vel_[act_idx] = s.cmd[i].vel;
-            ff_tau_[act_idx] = s.cmd[i].torque;
-            kp_vec_[act_idx] = s.cmd[i].kp;
-            kd_vec_[act_idx] = s.cmd[i].kd;
         }
 
         // int substeps = static_cast<int>(std::round(policy_dt_ / physics_dt_));
@@ -171,9 +192,22 @@ public:
         {
             std::lock_guard<std::mutex> lock(sim_mutex_);
             motor_on_ = s.motor_on;
+            const bool base_fixed = fixed_base_.load();
             for (int i = 0; i < substeps; ++i) {
                 apply_controller();
                 mj_step(model_, data_);
+                if (base_fixed) {
+                    data_->qpos[0] = default_base_position_.x();
+                    data_->qpos[1] = default_base_position_.y();
+                    data_->qpos[2] = default_base_position_.z();
+                    data_->qpos[3] = 1.0;
+                    data_->qpos[4] = 0.0;
+                    data_->qpos[5] = 0.0;
+                    data_->qpos[6] = 0.0;
+                    for (int j = 0; j < 6; ++j) {
+                        data_->qvel[j] = 0.0;
+                    }
+                }
             }
 
             publish_state();
@@ -257,6 +291,11 @@ private:
                 glfwGetFramebufferSize(window_, &viewport.width, &viewport.height);
                 mjv_updateScene(model_, data_, &opt_, nullptr, &cam_, mjCAT_ALL, &scn_);
                 mjr_render(viewport, &scn_, &con_);
+
+                // HUD overlay
+                const bool is_fixed = fixed_base_.load();
+                const std::string title = "[C] Fixed Base: " + std::string(is_fixed ? "ON  (locked)" : "OFF (floating)");
+                mjr_overlay(mjFONT_NORMAL, mjGRID_BOTTOMLEFT, viewport, title.c_str(), nullptr, &con_);
             }
 
             glfwSwapBuffers(window_);
@@ -290,6 +329,10 @@ private:
             } else if (key == GLFW_KEY_F) {
                 env->camera_tracking_ = !env->camera_tracking_;
                 env->getLogger()->info("Camera tracking {}", env->camera_tracking_ ? "ENABLED" : "DISABLED");
+            } else if (key == GLFW_KEY_C) {
+                const bool now_fixed = !env->fixed_base_.load();
+                env->fixed_base_.store(now_fixed);
+                env->getLogger()->info("Fixed base {}", now_fixed ? "ENABLED (base locked at default position)" : "DISABLED (floating base)");
             }
         }
     }
@@ -555,10 +598,10 @@ private:
         DataReader<bool>{"hip_pitch_right/on"},
         DataReader<bool>{"knee_left/on"},
         DataReader<bool>{"knee_right/on"},
-        DataReader<bool>{"ankle_pitch_left/on"},
-        DataReader<bool>{"ankle_pitch_right/on"},
-        DataReader<bool>{"ankle_roll_left/on"},
-        DataReader<bool>{"ankle_roll_right/on"},
+        DataReader<bool>{"ankle_upper_left/on"},
+        DataReader<bool>{"ankle_upper_right/on"},
+        DataReader<bool>{"ankle_lower_left/on"},
+        DataReader<bool>{"ankle_lower_right/on"},
     };
 
     DataReader<custom_types::MotorCmd> dr_cmd_[12] = {
@@ -570,10 +613,10 @@ private:
         DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd"},
         DataReader<custom_types::MotorCmd>{"knee_left/cmd"},
         DataReader<custom_types::MotorCmd>{"knee_right/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd"},
-        DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
+        DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd"},
     };
 
     DataWriter<custom_types::MotorCmd> dw_mtr_cmd_[12] = {
@@ -585,10 +628,10 @@ private:
         DataWriter<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"knee_left/cmd_applied"},
         DataWriter<custom_types::MotorCmd>{"knee_right/cmd_applied"},
-        DataWriter<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied"},
-        DataWriter<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied"},
-        DataWriter<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied"},
-        DataWriter<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_upper_right/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied"},
+        DataWriter<custom_types::MotorCmd>{"ankle_lower_right/cmd_applied"},
     };    
 
     DataWriter<custom_types::MotorState> dw_mtr_stat_[12] = {
@@ -600,10 +643,10 @@ private:
         DataWriter<custom_types::MotorState>{"hip_pitch_right/state"},
         DataWriter<custom_types::MotorState>{"knee_left/state"},
         DataWriter<custom_types::MotorState>{"knee_right/state"},
-        DataWriter<custom_types::MotorState>{"ankle_pitch_left/state"},
-        DataWriter<custom_types::MotorState>{"ankle_pitch_right/state"},
-        DataWriter<custom_types::MotorState>{"ankle_roll_left/state"},
-        DataWriter<custom_types::MotorState>{"ankle_roll_right/state"},
+        DataWriter<custom_types::MotorState>{"ankle_upper_left/state"},
+        DataWriter<custom_types::MotorState>{"ankle_upper_right/state"},
+        DataWriter<custom_types::MotorState>{"ankle_lower_left/state"},
+        DataWriter<custom_types::MotorState>{"ankle_lower_right/state"},
     };
 
     DataWriter<custom_types::Imu> dw_imu_{"imu_data"};
@@ -655,6 +698,16 @@ private:
     Eigen::Vector3d prev_base_vel_local_{0.0, 0.0, 0.0};
     double prev_time_ = 0.0;
 
+    // 모터단 interpolation 상태 (상위에서 target+duration을 받으면 현재 des_pos_ 기준으로 보간)
+    struct MotorCmdInterp {
+        bool active = false;
+        double start_ref = 0.0;    // interpolation 시작 시점의 des_pos
+        double target_pos = 0.0;   // 목표 position (변경 감지용)
+        double duration_ms = 0.0;
+        double elapsed_ms = 0.0;
+    };
+    std::array<MotorCmdInterp, 12> cmd_interp_{};
+
     EmaFilter ema_filter_;
 
     GLFWwindow* window_ = nullptr;
@@ -665,6 +718,7 @@ private:
 
     bool camera_tracking_ = true;
     int base_link_id_ = -1;
+    std::atomic<bool> fixed_base_{false};
 
     std::thread viewer_thread_;
     std::atomic<bool> viewer_stop_requested_{false};

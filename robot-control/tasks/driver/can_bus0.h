@@ -45,6 +45,7 @@ namespace task_pool {
 
         void initialize(void*) override {
             for (auto& flag: on_flag) flag = false;
+            for (auto& s: motor_sync_) s = false;
 
             for (auto& cmd: cmds) {
                 cmd.kp = 0;
@@ -53,6 +54,7 @@ namespace task_pool {
                 cmd.vel = 0;
                 cmd.torque = 0;
             }
+            for (auto& interp: cmd_interp) interp = {};
         }
 
         void execute(void*) override {
@@ -61,7 +63,21 @@ namespace task_pool {
             for (int i=0; i<cmds.size(); i++) {
                 dr_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
                     cmd_wdt[i] = getExecutionLocalTick();
-                    cmds[i].pos = data.pos;
+                    if (data.duration_ms > 0.0) {
+                        // 새 타겟이거나 처음 진입할 때만 interpolation 시작
+                        if (!cmd_interp[i].active || std::abs(data.pos - cmd_interp[i].target_pos) > 1e-4) {
+                            cmd_interp[i].start_ref = motors[i]->state.pos; // 실제 모터 피드백 위치에서 시작
+                            cmd_interp[i].target_pos = data.pos;
+                            cmd_interp[i].duration_ms = data.duration_ms;
+                            cmd_interp[i].elapsed_ms = 0.0;
+                            cmd_interp[i].active = true;
+                        }
+                        // 같은 타겟이면 계속 진행
+                    } else {
+                        // 즉시 명령: interpolation 취소, ref 즉시 갱신
+                        cmd_interp[i].active = false;
+                        cmds[i].pos = data.pos;
+                    }
                     cmds[i].vel = data.vel;
                     cmds[i].torque = data.torque;
                     cmds[i].kp = data.kp;
@@ -73,11 +89,15 @@ namespace task_pool {
                     if (!on_flag[i] && on) {
                         getLogger()->info("[{}] Motor {} ON", getName(), i);
                         on_flag[i] = on;
+                        motor_sync_[i] = false; // Start 후 피드백 수신 시 동기화
+                        cmd_interp[i] = {};
                         if (so > 0) motors[i]->Start(so);
                     }
                     if (on_flag[i] && !on) {
                         getLogger()->info("[{}] Motor {} OFF", getName(), i);
                         on_flag[i] = on;
+                        motor_sync_[i] = false;
+                        cmd_interp[i] = {};
                         if (so > 0) motors[i]->Stop(so);
                     }
                 });
@@ -108,7 +128,15 @@ namespace task_pool {
                         if (motors[i]->isMyFrame(&rx)) {
                             if (motors[i]->parseFeedback(&rx)) {
                                 com_wdt[i] = getExecutionLocalTick();
-                                
+
+                                // 동기화 미완료 상태: 피드백 위치로 동기화 후 제어 허용
+                                if (!motor_sync_[i]) {
+                                    cmds[i].pos = motors[i]->state.pos;
+                                    cmd_interp[i] = {};
+                                    motor_sync_[i] = true;
+                                    getLogger()->info("[{}] Motor {} synced at pos={:.3f}", getName(), i, motors[i]->state.pos);
+                                }
+
                                 custom_types::MotorState state{};
                                 state.pos = motors[i]->state.pos;
                                 state.vel = motors[i]->state.vel;
@@ -131,18 +159,37 @@ namespace task_pool {
                 // }
 
 
-                // 2. 제어 명령 생성 및 송신
+                // 2. 모터단 interpolation 진행 및 제어 명령 송신
+                const double dt_ms = 1000.0 / getFrequency();
                 int offline = 0;
                 auto tick = getExecutionLocalTick();
                 for (auto i=0; i<motors.size(); i++) {
                     if (tick - com_wdt[i] > 1 * getFrequency()) {
                         motors[i]->state.online = false;
-                        // motors[i]->Start(so, true);
                         offline++;
+                        // 피드백 타임아웃: 동기화 해제 및 interpolation 취소
+                        if (motor_sync_[i]) {
+                            motor_sync_[i] = false;
+                            cmd_interp[i] = {};
+                            getLogger()->warn("[{}] Motor {} feedback timeout, re-sync required", getName(), i);
+                        }
+                    }
+
+                    // interpolation 진행: cmds[i].pos를 현재 ref로 갱신
+                    if (cmd_interp[i].active) {
+                        cmd_interp[i].elapsed_ms += dt_ms;
+                        const double ratio = std::min(cmd_interp[i].elapsed_ms / cmd_interp[i].duration_ms, 1.0);
+                        cmds[i].pos = cmd_interp[i].start_ref + ratio * (cmd_interp[i].target_pos - cmd_interp[i].start_ref);
+                        if (ratio >= 1.0) {
+                            cmd_interp[i].active = false;
+                        }
                     }
 
                     const bool motor_on = on_flag[i];
-                    const MotorCommand applied_cmd = motor_on ? cmds[i] : MotorCommand{};
+                    const bool cmd_alive = (tick - cmd_wdt[i] <= 1 * getFrequency());
+                    const bool ready = motor_on && motor_sync_[i] && cmd_alive;
+
+                    const MotorCommand applied_cmd = ready ? cmds[i] : MotorCommand{};
                     custom_types::MotorCmd applied{};
                     applied.pos = applied_cmd.pos;
                     applied.vel = applied_cmd.vel;
@@ -151,12 +198,11 @@ namespace task_pool {
                     applied.kd = applied_cmd.kd;
                     dw_mtr_cmd_applied[i].write(applied);
 
-                    
-                    if (motor_on && (tick - cmd_wdt[i] <= 1 * getFrequency())) {
+                    if (ready) {
                         motors[i]->Control(so, cmds[i]);
                     } else {
                         MotorCommand zero_cmd{};
-                        motors[i]->Control(so, zero_cmd);                       
+                        motors[i]->Control(so, zero_cmd);
                     }
                 }
 
@@ -219,8 +265,8 @@ namespace task_pool {
             DataWriter<custom_types::MotorState>{"hip_roll_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"hip_pitch_left/state", ArchiveOption::Enable},
             DataWriter<custom_types::MotorState>{"knee_left/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_pitch_left/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_roll_left/state", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorState>{"ankle_upper_left/state", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorState>{"ankle_lower_left/state", ArchiveOption::Enable},
         };
 
         DataReader<custom_types::MotorCmd> dr_mtr_cmd[6] = {
@@ -228,24 +274,24 @@ namespace task_pool {
             DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd"},
             DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd"},
             DataReader<custom_types::MotorCmd>{"knee_left/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd"},
+            DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd"},
+            DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd"},
         };
         DataWriter<custom_types::MotorCmd> dw_mtr_cmd_applied[6] = {
             DataWriter<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"hip_roll_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"hip_pitch_left/cmd_applied", ArchiveOption::Enable},
             DataWriter<custom_types::MotorCmd>{"knee_left/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied", ArchiveOption::Enable},
+            DataWriter<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied", ArchiveOption::Enable},
         };
         DataReader<bool> dr_motor_on[6] = {
             DataReader<bool>{"hip_yaw_left/on"},
             DataReader<bool>{"hip_roll_left/on"},
             DataReader<bool>{"hip_pitch_left/on"},
             DataReader<bool>{"knee_left/on"},
-            DataReader<bool>{"ankle_pitch_left/on"},
-            DataReader<bool>{"ankle_roll_left/on"},
+            DataReader<bool>{"ankle_upper_left/on"},
+            DataReader<bool>{"ankle_lower_left/on"},
         };
 
         Parameter<std::string> p_port{"can0.port", "can0"};
@@ -298,6 +344,8 @@ namespace task_pool {
             for (auto& mtr : motors) {
                 mtr->state.online = false;
             }
+            for (auto& s : motor_sync_) s = false;
+            for (auto& interp : cmd_interp) interp = {};
         }
 
         bool can_ifup(const char* port) {
@@ -395,11 +443,22 @@ namespace task_pool {
         
 
     private:
+        // 모터단 interpolation 상태 (상위에서 target+duration을 받으면 현재 ref 기준으로 보간)
+        struct MotorCmdInterp {
+            bool active = false;
+            double start_ref = 0.0;    // interpolation 시작 시점의 ref position
+            double target_pos = 0.0;   // 목표 position (변경 감지용)
+            double duration_ms = 0.0;
+            double elapsed_ms = 0.0;
+        };
+        std::array<MotorCmdInterp, 6> cmd_interp{};
+
         int so=-1;
         int cmd_wdt[6] = {0,};
         int com_wdt[6] = {0,};
         int can_wdt = 0;
         bool on_flag[6] = {false,};
+        bool motor_sync_[6] = {false,}; // 피드백 기반 동기화 완료 여부
         bool link_initialized = false;
         bool restart_required = false;
 

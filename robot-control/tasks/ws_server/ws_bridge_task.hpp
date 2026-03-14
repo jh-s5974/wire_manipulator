@@ -87,6 +87,8 @@ private:
     DataReader<int> dr_robot_mode_current_{"gui/robot/mode_current", DependencyType::Weak};
     DataReader<int> dr_safety_level_{"manager/safety_level", DependencyType::Weak};
     DataReader<bool> dr_safety_lock_{"safety/lock_state", DependencyType::Weak};
+    DataReader<bool> dr_safety_restore_{"safety/restore_state", DependencyType::Weak};
+    DataReader<bool> dr_walk_ready_{"manager/walk_ready", DependencyType::Weak};
     DataWriter<bool> dw_motor_control_request_{"gui/motor/control_request"};
     DataWriter<int> dw_robot_mode_request_{"gui/robot/mode_request"};
     DataWriter<rt::Signal> dw_safety_reset_{"manager/reset_signal"};
@@ -114,6 +116,8 @@ private:
     int robot_mode_current_ = 0;
     int safety_level_ = 0;
     bool safety_locked_ = false;
+    bool safety_restoring_ = false;
+    bool walk_ready_ = false;
 
     static wsbridge::Vec3 quat_to_rpy(double w, double x, double y, double z) {
         const double sinr_cosp = 2.0 * (w * x + y * z);
@@ -203,6 +207,14 @@ private:
         dr_safety_lock_.on_update([&](const bool& locked) {
             safety_locked_ = locked;
         });
+
+        dr_safety_restore_.on_update([&](const bool& restoring) {
+            safety_restoring_ = restoring;
+        });
+
+        dr_walk_ready_.on_update([&](const bool& ready) {
+            walk_ready_ = ready;
+        });
     }
 
     wsbridge::BridgeState build_snapshot() {
@@ -212,6 +224,8 @@ private:
         state.robot_mode.current = robot_mode_to_string(robot_mode_current_);
         state.safety.level = safety_level_to_string(safety_level_);
         state.safety.locked = safety_locked_;
+        state.safety.restoring = safety_restoring_;
+        state.robot_mode.walk_ready = walk_ready_;
         state.motors.reserve(kMotorCount);
         state.joint_states.reserve(12);
 

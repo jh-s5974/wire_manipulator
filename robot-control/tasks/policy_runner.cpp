@@ -158,7 +158,7 @@ void PolicyRunner::execute(PolicyRunnerState& s) {
         return;
     }
 
-    if (s.cnt++ % 5 > 0) {
+    if (s.cnt++ % 4 > 0) {
         return;
     }
     build_observation(s);
@@ -192,6 +192,7 @@ void PolicyRunner::execute(PolicyRunnerState& s) {
         cmd.torque = 0.0;
         cmd.kp = joint_kp_[i];
         cmd.kd = joint_kd_[i];
+        cmd.duration_ms = 20;
         dw_action[i].write(cmd);
     }
 }

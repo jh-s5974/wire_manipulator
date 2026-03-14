@@ -1,6 +1,6 @@
 policy_checkpoint_path: policy/policy47_7.pt
 policy_stand_path: policy/policy_stand3.pt
-control_dt: 0.004
+control_dt: 0.005
 policy_dt: 0.02
 physics_dt: 0.0005
 cutoff_freq: 200
@@ -40,18 +40,18 @@ joint_kp:
 # - 25.0
 # - 25.0
 # - 25.0
-- 100.0 # 240.0
-- 100.0 # 240.0
-- 100.0 # 240.0
-- 100.0 # 240.0
-- 100.0 # 50.0
-- 100.0 # 50.0
-- 100.0 # 20.0
-- 100.0 # 20.0
-- 100.0 # 10.0
-- 100.0 # 10.0
-- 100.0 # 10.0
-- 100.0 # 10.0
+- 240.0
+- 240.0
+- 240.0
+- 240.0
+- 50.0
+- 50.0
+- 20.0
+- 20.0
+- 10.0
+- 10.0
+- 10.0
+- 10.0
 
 joint_kd:
 # - 5.0
@@ -66,18 +66,18 @@ joint_kd:
 # - 1.0
 # - 1.0
 # - 1.0
-- 1.0 # 5.0
-- 1.0 # 5.0
-- 1.0 # 5.0
-- 1.0 # 5.0
-- 1.0 # 1.8
-- 1.0 # 1.8
-- 1.0 # 1.1
-- 1.0 # 1.1
-- 1.0 # 1.0
-- 1.0 # 1.0
-- 1.0 # 1.0
-- 1.0 # 1.0
+- 5.0
+- 5.0
+- 5.0
+- 5.0
+- 1.8
+- 1.8
+- 1.1
+- 1.1
+- 1.0
+- 1.0
+- 1.0
+- 1.0
 
 effort_limits:
 - 40.0
@@ -176,29 +176,29 @@ can1.port: can2
 #        hip_pitch_left, hip_pitch_right, knee_left, knee_right,
 #        ankle_pitch_left, ankle_pitch_right, ankle_roll_left, ankle_roll_right
 safety_layer.joint_pos_limit_lower:
-- -1.5 # -0.698132  # hip_yaw_left
-- -1.5 # -1.5708    # hip_yaw_right
-- -1.5 # -0.698132  # hip_roll_left
-- -1.5 # -1.5708    # hip_roll_right
-- -1.5 # -1.8326    # hip_pitch_left
-- -1.5 # -1.8326    # hip_pitch_right
-- -1.5 # 0.0        # knee_left
-- -1.5 # 0.0        # knee_right
-- -1.5 # -1.22173   # ankle_pitch_left
-- -1.5 # -1.22173   # ankle_pitch_right
-- -1.5 # -0.663225  # ankle_roll_left
-- -1.5 # -0.523599  # ankle_roll_right
+- -3 #-0.698132  # hip_yaw_left
+- -3 #-1.5708    # hip_yaw_right
+- -3 #-0.698132  # hip_roll_left
+- -3 #-1.5708    # hip_roll_right
+- -3 #-1.8326    # hip_pitch_left
+- -3 #-1.8326    # hip_pitch_right
+- -3 #-0.1        # knee_left
+- -3 #-0.1        # knee_right
+- -3 #-1.22173   # ankle_pitch_left
+- -3 #-1.22173   # ankle_pitch_right
+- -3 #-0.663225  # ankle_roll_left
+- -3 #-0.523599  # ankle_roll_right
 
 safety_layer.joint_pos_limit_upper:
-- 1.5 # 1.5708     # hip_yaw_left
-- 1.5 # 0.698132   # hip_yaw_right
-- 1.5 # 1.5708     # hip_roll_left
-- 1.5 # 0.872665   # hip_roll_right
-- 1.5 # 0.523599   # hip_pitch_left
-- 1.5 # 0.523599   # hip_pitch_right
-- 1.5 # 2.1293     # knee_left
-- 1.5 # 2.1293     # knee_right
-- 1.5 # 1.0472     # ankle_pitch_left
-- 1.5 # 1.0472     # ankle_pitch_right
-- 1.5 # 0.523599   # ankle_roll_left
-- 1.5 # 0.663225   # ankle_roll_right
+- 3 #1.5708     # hip_yaw_left
+- 3 #0.698132   # hip_yaw_right
+- 3 #1.5708     # hip_roll_left
+- 3 #0.872665   # hip_roll_right
+- 3 #0.523599   # hip_pitch_left
+- 3 #0.523599   # hip_pitch_right
+- 3 #2.1293     # knee_left
+- 3 #2.1293     # knee_right
+- 3 #1.0472     # ankle_pitch_left
+- 3 #1.0472     # ankle_pitch_right
+- 3 #0.523599   # ankle_roll_left
+- 3 #0.663225   # ankle_roll_right
