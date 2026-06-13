@@ -18,10 +18,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 find_package(Eigen3 REQUIRED)
-find_package(glfw3 REQUIRED)
-
-set(Torch_DIR /opt/libtorch/share/cmake/Torch)
-find_package(Torch REQUIRED)
+find_package(glfw3  REQUIRED)
 
 set(MUJOCO_DIR $ENV{HOME}/.mujoco/mujoco-3.2.0)
 find_path(MUJOCO_INCLUDE_DIR mujoco/mujoco.h PATHS ${MUJOCO_DIR}/include)
@@ -30,42 +27,29 @@ find_library(MUJOCO_LIBRARY libmujoco.so.3.2.0 PATHS ${MUJOCO_DIR}/lib)
 if(NOT MUJOCO_INCLUDE_DIR)
   message(FATAL_ERROR "MuJoCo headers not found. Expected at ${MUJOCO_DIR}/include")
 endif()
-
 if(NOT MUJOCO_LIBRARY)
   message(FATAL_ERROR "MuJoCo library not found. Expected at ${MUJOCO_DIR}/lib")
 endif()
 
 add_subdirectory(external)
 
-
-
-add_executable(robot_simul
-    robot_simul.cpp
-    tasks/policy_runner.cpp
-)
-target_include_directories(robot_simul SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIRS} ${manif_INCLUDE_DIRS})
-target_include_directories(robot_simul PRIVATE 
+# ── robot_simul: MuJoCo 시뮬레이션 (매니퓰레이터) ──
+add_executable(robot_simul robot_simul.cpp)
+target_include_directories(robot_simul SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIRS})
+target_include_directories(robot_simul PRIVATE
     ${MUJOCO_INCLUDE_DIR}
-    /opt/openrobots/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/tasks
+    ${CMAKE_CURRENT_SOURCE_DIR}/tasks
 )
-target_link_libraries(robot_simul PRIVATE rtfw::rtfw ${TORCH_LIBRARIES} ${MUJOCO_LIBRARY} glfw)
+target_link_libraries(robot_simul PRIVATE rtfw::rtfw ${MUJOCO_LIBRARY} glfw)
 target_link_libraries(robot_simul PRIVATE uWebSockets)
 target_link_libraries(robot_simul PRIVATE nlohmann_json::nlohmann_json)
 
-
-
-
-add_executable(robot_control
-    robot_control.cpp
-    tasks/policy_runner.cpp
+# ── robot_control: 실제 하드웨어 제어 ──
+add_executable(robot_control robot_control.cpp)
+target_include_directories(robot_control SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIRS})
+target_include_directories(robot_control PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tasks
 )
-target_include_directories(robot_control SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIRS} ${manif_INCLUDE_DIRS})
-target_include_directories(robot_control PRIVATE 
-    ${MUJOCO_INCLUDE_DIR}
-    /opt/openrobots/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/tasks
-)
-target_link_libraries(robot_control PRIVATE rtfw::rtfw ${TORCH_LIBRARIES})
+target_link_libraries(robot_control PRIVATE rtfw::rtfw)
 target_link_libraries(robot_control PRIVATE uWebSockets)
 target_link_libraries(robot_control PRIVATE nlohmann_json::nlohmann_json)

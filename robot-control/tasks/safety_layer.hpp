@@ -1,25 +1,28 @@
 #pragma once
 
+// Safety Layer — 매니퓰레이터용 (5 조인트, IMU/RL 없음)
+//
+// 모드: MANUAL (기본) / LOCK (안전 위반 시) / RESTORE (잠금 해제 복구)
+//
+// 세이프티 수치 조정은 config/robotnl.yaml 의
+//   safety_layer.*  키들을 수정하면 됩니다.
+//
+// 조인트 위치 한계 순서 (joint0 ~ joint4):
+//   joint0: base_yaw   (revolute, rad)
+//   joint1: pitch       (revolute, rad)
+//   joint2: lower_link  (prismatic, m)
+//   joint3: elbow_pitch (revolute, rad)
+//   joint4: upper_link  (prismatic, m)
+
 #include <rtfw/task.h>
 #include "custom_types.hpp"
 #include "util.hpp"
 
-#include <Eigen/Dense>
-
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
-#include <cstring>
-#include <filesystem>
 #include <limits>
-#include <memory>
-#include <mutex>
-#include <stdexcept>
 #include <string>
-#include <thread>
-#include <unordered_map>
-#include <vector>
 
 using namespace std::chrono_literals;
 using namespace rtfw;
@@ -27,39 +30,19 @@ using namespace rtfw::rt;
 
 namespace task_pool {
 
-    enum SafetyLayerLevel {
-        SL_ESSENTIAL = 0,
-        SL_STRICT = 1,
-    };
+static constexpr int SL_N = 5; // 조인트 수
 
-    enum Mode {
-        MANUAL,
-        RL,
-        LOCK,
-        RESTORE,
-    };
+enum SLMode { SL_MANUAL, SL_LOCK, SL_RESTORE };
 
 struct SafetyLayerState {
-    std::array<custom_types::MotorCmd, 12> manager_cmd{};
-    std::array<custom_types::MotorCmd, 12> policy_action{};
-    std::array<custom_types::MotorState, 12> motor_state{};
-    custom_types::Imu imu{};
-    std::array<bool, 12> motor_on{};
-    std::array<bool, 12> manager_cmd_online{};
-    std::array<bool, 12> policy_action_online{};
-    std::array<bool, 12> motor_state_online{};
-    bool imu_online = false;
-    bool use_policy_action = false;
-    Mode mode = MANUAL;
-    uint64_t restore_enter_tick = 0;
-    std::array<uint64_t, 12> manager_cmd_tick{};
-    std::array<uint64_t, 12> policy_action_tick{};
-    std::array<uint64_t, 12> motor_state_tick{};
-    uint64_t imu_tick = 0;
-    // bool safety_armed = false;
-    int safety_level = SL_ESSENTIAL;
-    int prev_safety_level = SL_ESSENTIAL;
-
+    std::array<custom_types::MotorCmd,   SL_N> manager_cmd{};
+    std::array<custom_types::MotorState, SL_N> motor_state{};
+    std::array<bool, SL_N> manager_cmd_online{};
+    std::array<bool, SL_N> motor_state_online{};
+    std::array<uint64_t, SL_N> manager_cmd_tick{};
+    std::array<uint64_t, SL_N> motor_state_tick{};
+    SLMode   mode                = SL_MANUAL;
+    uint64_t restore_enter_tick  = 0;
 };
 
 class SafetyLayer : public Task<SafetyLayerState> {
@@ -67,479 +50,236 @@ public:
     const char* getName() const override { return "SafetyLayer"; }
 
     void initialize(SafetyLayerState& s) override {
-        s.mode = Mode::MANUAL;
-        s.use_policy_action = false;
+        s.mode = SL_MANUAL;
         s.manager_cmd_online.fill(false);
-        s.policy_action_online.fill(false);
         s.motor_state_online.fill(false);
-        s.motor_on.fill(true);
-
-        s.restore_enter_tick = getExecutionLocalTick();
         s.manager_cmd_tick.fill(0);
-        s.policy_action_tick.fill(0);
         s.motor_state_tick.fill(0);
-        s.imu_tick = 0;
-        // s.safety_armed = false;
-        s.safety_level = SL_ESSENTIAL;
-        s.prev_safety_level = SL_ESSENTIAL;
-
+        s.restore_enter_tick = getExecutionLocalTick();
     }
 
     void execute(SafetyLayerState& s) override {
-
+        // 잠금 해제 요청
         dr_reset.on_update([&]() {
-            if (s.mode == Mode::LOCK) {
-                s.mode = Mode::RESTORE;
+            if (s.mode == SL_LOCK) {
+                s.mode = SL_RESTORE;
                 s.restore_enter_tick = getExecutionLocalTick();
-                getLogger()->info("[{}] Received reset signal, attempting to restore from LOCK mode", getName());
-
-
-                for (int i=0; i<12; i++) {
-                    // const custom_types::MotorCmd cmd = blend_cmd(make_zero_cmd(), s.manager_cmd[i], ratio);
-                    custom_types::MotorCmd cmd = s.manager_cmd[i];
-                    cmd.duration_ms = p_restore_duration_sec.read() * 1000;
-                    dw_mtr_cmd_[i].write(clamp_cmd(cmd));
+                getLogger()->info("[{}] Restore requested from LOCK", getName());
+                for (int i = 0; i < SL_N; i++) {
+                    auto cmd = s.manager_cmd[i];
+                    cmd.duration_ms = p_restore_duration_sec.read() * 1000.0;
+                    dw_mtr_cmd[i].write(clamp_cmd(cmd));
                 }
             }
         });
 
-        dr_rl_signal_.on_update([&](const bool& on) {
-            // if (s.mode == Mode::LOCK || s.mode == Mode::RESTORE) {
-            //     s.use_policy_action = on;
-            //     return;
-            // }
-
-            if (!on) {
-                if (s.mode == Mode::RL) {
-                    s.mode = Mode::MANUAL;
-                    getLogger()->info("[{}] Switching to MANUAL mode", getName());
-
-                    for (int i = 0; i < 12; ++i) {
-                        s.manager_cmd_online[i] = true;
-                        s.manager_cmd_tick[i] = getExecutionLocalTick();
-                    }
-                }
-            } else {
-                if (s.mode == Mode::MANUAL) {
-                    s.mode = Mode::RL;
-                    getLogger()->info("[{}] Switching to RL mode", getName());
-
-                    for (int i = 0; i < 12; ++i) {
-                        s.policy_action_online[i] = true;
-                        s.policy_action_tick[i] = getExecutionLocalTick();
-                    }
-                }
-            }
-            s.use_policy_action = on;
-        });
-
-        dr_safety_level_.on_update([&](const int& level) {
-            if (level == 1) {
-                s.safety_level = SL_STRICT;
-            } else {
-                s.safety_level = SL_ESSENTIAL;
-            }
-        });
-
-         for (int i = 0; i < 12; ++i) {
-            dr_manager_cmd_[i].on_update([&, i](const custom_types::MotorCmd& data) {
-                s.manager_cmd[i] = data;
+        // Manager 명령 수신
+        for (int i = 0; i < SL_N; i++) {
+            dr_manager_cmd[i].on_update([&, i](const custom_types::MotorCmd& d) {
+                s.manager_cmd[i]        = d;
                 s.manager_cmd_online[i] = true;
-                s.manager_cmd_tick[i] = getExecutionLocalTick();
+                s.manager_cmd_tick[i]   = getExecutionLocalTick();
             });
-
-            dr_policy_action_[i].on_update([&, i](const custom_types::MotorCmd& data) {
-                s.policy_action[i] = data;
-                s.policy_action_online[i] = true;
-                s.policy_action_tick[i] = getExecutionLocalTick();
-            });
-
-            dr_mtr_stat_[i].on_update([&, i](const custom_types::MotorState& data) {
-                s.motor_state[i] = data;
+            dr_mtr_stat[i].on_update([&, i](const custom_types::MotorState& d) {
+                s.motor_state[i]        = d;
                 s.motor_state_online[i] = true;
-                s.motor_state_tick[i] = getExecutionLocalTick();
+                s.motor_state_tick[i]   = getExecutionLocalTick();
             });
         }
 
-        dr_imu_.on_update([&](const custom_types::Imu& data) {
-            s.imu = data;
-            s.imu_online = true;
-            s.imu_tick = getExecutionLocalTick();
-        });
-
+        // 안전 검사
         std::string fault_reason;
-        if (s.mode != Mode::LOCK && s.mode != Mode::RESTORE && !safety_check(s, fault_reason)) {
+        if (s.mode == SL_MANUAL && !safety_check(s, fault_reason))
             enter_lock(s, fault_reason);
-        }
-        
-        switch(s.mode) {
-            case MANUAL:
-                for (int i=0; i<12; i++) {
-                    dw_mtr_cmd_[i].write(clamp_cmd(s.manager_cmd[i]));
+
+        switch (s.mode) {
+            case SL_MANUAL:
+                for (int i = 0; i < SL_N; i++)
+                    dw_mtr_cmd[i].write(clamp_cmd(s.manager_cmd[i]));
+                break;
+
+            case SL_LOCK:
+                for (int i = 0; i < SL_N; i++) {
+                    custom_types::MotorCmd lock{};
+                    lock.pos        = s.motor_state_online[i] ? s.motor_state[i].pos : 0.0;
+                    lock.kp         = p_lock_kp.read();
+                    lock.kd         = p_lock_kd.read();
+                    lock.duration_ms = 0.0;
+                    dw_mtr_cmd[i].write(lock);
                 }
                 break;
-            case RL:
-                for (int i=0; i<12; i++) {
-                    dw_mtr_cmd_[i].write(clamp_cmd(s.policy_action[i]));
+
+            case SL_RESTORE: {
+                double elapsed = static_cast<double>(getExecutionLocalTick() - s.restore_enter_tick)
+                                 / getFrequency();
+                if (elapsed >= p_restore_duration_sec.read()) {
+                    s.mode = SL_MANUAL;
+                    getLogger()->info("[{}] Restore complete → MANUAL", getName());
                 }
-                break;
-            case LOCK: {
-                for (int i=0; i<12; i++) {
-                    custom_types::MotorCmd lock_cmd;
-                    lock_cmd.pos = s.motor_state_online[i] ? s.motor_state[i].pos : 0.0;
-                    lock_cmd.vel = 0.0;
-                    lock_cmd.torque = 0.0;
-                    lock_cmd.kp = p_lock_kp.read();
-                    lock_cmd.kd = p_lock_kd.read();
-                    lock_cmd.duration_ms = 0.0; // 진행 중인 모터단 interpolation 즉시 취소
-                    dw_mtr_cmd_[i].write(lock_cmd);
-                }
-                break;
-            }
-            case RESTORE: {
-                double elapsed = getExecutionLocalTick() - s.restore_enter_tick;
-                elapsed /= getFrequency();
-                const double transition_duration = std::max(1e-3, p_restore_duration_sec.read());
-                double ratio = elapsed / transition_duration;
-                if (ratio >= 1.0) {
-                    ratio = 1.0;
-                    s.mode = Mode::MANUAL;
-                    getLogger()->info("[{}] Restore complete, switching to MANUAL mode", getName());
-                }
-                // for (int i=0; i<12; i++) {
-                //     // const custom_types::MotorCmd cmd = blend_cmd(make_zero_cmd(), s.manager_cmd[i], ratio);
-                //     custom_types::MotorCmd cmd = s.manager_cmd[i];
-                //     cmd.duration_ms = p_restore_duration_sec.read() * 1000;
-                //     dw_mtr_cmd_[i].write(clamp_cmd(cmd));
-                // }
                 break;
             }
         }
 
-        dw_lock_state_.write(s.mode == Mode::LOCK);
-        dw_restore_state_.write(s.mode == Mode::RESTORE);
+        dw_lock_state.write(s.mode == SL_LOCK);
+        dw_restore_state.write(s.mode == SL_RESTORE);
     }
 
-
 private:
-    DataReader<bool> dr_rl_signal_{"manager/rl_signal", DependencyType::Weak};
-    DataReader<int> dr_safety_level_{"manager/safety_level", DependencyType::Weak};
+    // ── 데이터 채널 ──
     DataReader<rt::Signal> dr_reset{"manager/reset_signal", DependencyType::Weak};
-    DataWriter<bool> dw_lock_state_{"safety/lock_state"};
-    DataWriter<bool> dw_restore_state_{"safety/restore_state"};
 
+    DataReader<custom_types::MotorCmd> dr_manager_cmd[SL_N] = {
+        DataReader<custom_types::MotorCmd>{"manager/joint0/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"manager/joint1/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"manager/joint2/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"manager/joint3/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"manager/joint4/cmd", DependencyType::Weak},
+    };
+    DataReader<custom_types::MotorState> dr_mtr_stat[SL_N] = {
+        DataReader<custom_types::MotorState>{"joint0/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"joint1/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"joint2/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"joint3/state", DependencyType::Weak},
+        DataReader<custom_types::MotorState>{"joint4/state", DependencyType::Weak},
+    };
+    DataWriter<custom_types::MotorCmd> dw_mtr_cmd[SL_N] = {
+        DataWriter<custom_types::MotorCmd>{"joint0/cmd"},
+        DataWriter<custom_types::MotorCmd>{"joint1/cmd"},
+        DataWriter<custom_types::MotorCmd>{"joint2/cmd"},
+        DataWriter<custom_types::MotorCmd>{"joint3/cmd"},
+        DataWriter<custom_types::MotorCmd>{"joint4/cmd"},
+    };
+    DataWriter<bool> dw_lock_state{"safety/lock_state"};
+    DataWriter<bool> dw_restore_state{"safety/restore_state"};
+
+    // ── 파라미터 (config/robotnl.yaml에서 수정) ──
     Parameter<double> p_restore_duration_sec{"safety_layer.restore_duration_sec", 10.0};
     Parameter<double> p_cmd_timeout_sec{"safety_layer.cmd_timeout_sec", 1.0};
     Parameter<double> p_state_timeout_sec{"safety_layer.state_timeout_sec", 1.0};
-    Parameter<double> p_imu_timeout_sec{"safety_layer.imu_timeout_sec", 1.0};
 
-    Parameter<std::vector<double>> p_joint_pos_limit_lower{"safety_layer.joint_pos_limit_lower",
-        {-0.698132, -1.5708, -0.698132, -1.5708, -1.8326, -1.8326, 0.0, 0.0, -1.22173, -1.22173, -0.663225, -0.523599}};
-    Parameter<std::vector<double>> p_joint_pos_limit_upper{"safety_layer.joint_pos_limit_upper",
-        {1.5708, 0.698132, 1.5708, 0.872665, 0.523599, 0.523599, 2.1293, 2.1293, 1.0472, 1.0472, 0.523599, 0.663225}};
-    Parameter<double> p_joint_vel_limit{"safety_layer.joint_vel_limit", 60.0};
-    Parameter<double> p_joint_torque_limit{"safety_layer.joint_torque_limit", 60.0};
+    // 조인트 위치 한계 [joint0~4]: rad (revolute) / m (prismatic)
+    // URDF 한계값 기본 적용 — yaml에서 덮어쓸 수 있음
+    Parameter<std::vector<double>> p_joint_pos_limit_lower{
+        "safety_layer.joint_pos_limit_lower",
+        {-2.094395, -0.523599, -0.09, -1.570796, -0.095}
+    };
+    Parameter<std::vector<double>> p_joint_pos_limit_upper{
+        "safety_layer.joint_pos_limit_upper",
+        { 2.094395,  1.570796,  0.0,  1.570796,  0.0}
+    };
+
+    // 위치 한계 허용 오차 [rad / m]
+    // 시뮬레이션: ~0.002 (부동소수점 드리프트 흡수)
+    // 실제 하드웨어: ~0.001 (엔코더 노이즈 흡수)
+    Parameter<double> p_pos_tolerance     {"safety_layer.pos_tolerance",       0.002};
+
+    Parameter<double> p_joint_vel_limit   {"safety_layer.joint_vel_limit",    30.0};
+    Parameter<double> p_joint_torque_limit{"safety_layer.joint_torque_limit", 30.0};
     Parameter<double> p_joint_temp_limit_c{"safety_layer.joint_temp_limit_c", 95.0};
 
-    Parameter<double> p_imu_tilt_limit_deg{"safety_layer.imu_tilt_limit_deg", 60.0};
-    Parameter<double> p_imu_quat_norm_tol{"safety_layer.imu_quat_norm_tol", 0.2};
+    Parameter<double> p_cmd_pos_limit   {"safety_layer.cmd_pos_limit",    10.0};
+    Parameter<double> p_cmd_vel_limit   {"safety_layer.cmd_vel_limit",    30.0};
+    Parameter<double> p_cmd_torque_limit{"safety_layer.cmd_torque_limit", 30.0};
+    Parameter<double> p_cmd_kp_limit    {"safety_layer.cmd_kp_limit",    600.0};
+    Parameter<double> p_cmd_kd_limit    {"safety_layer.cmd_kd_limit",      5.0};
+    Parameter<double> p_lock_kp         {"safety_layer.lock_kp",         100.0};
+    Parameter<double> p_lock_kd         {"safety_layer.lock_kd",           3.0};
 
-    Parameter<double> p_cmd_pos_limit{"safety_layer.cmd_pos_limit", 3.2};
-    Parameter<double> p_cmd_vel_limit{"safety_layer.cmd_vel_limit", 40.0};
-    Parameter<double> p_cmd_torque_limit{"safety_layer.cmd_torque_limit", 120.0};
-    Parameter<double> p_cmd_kp_limit{"safety_layer.cmd_kp_limit", 600.0};
-    Parameter<double> p_cmd_kd_limit{"safety_layer.cmd_kd_limit", 5.0};
-    Parameter<double> p_lock_kp{"safety_layer.lock_kp", 100.0};
-    Parameter<double> p_lock_kd{"safety_layer.lock_kd", 3.0};
-
-
-    DataReader<custom_types::MotorCmd> dr_manager_cmd_[12] = {
-        DataReader<custom_types::MotorCmd>{"manager/hip_yaw_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/hip_yaw_right/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/hip_roll_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/hip_roll_right/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/hip_pitch_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/hip_pitch_right/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/knee_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/knee_right/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/ankle_pitch_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/ankle_pitch_right/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/ankle_roll_left/cmd", DependencyType::Weak},
-        DataReader<custom_types::MotorCmd>{"manager/ankle_roll_right/cmd", DependencyType::Weak},
-    };
-
-    DataReader<custom_types::MotorCmd> dr_policy_action_[12] = {
-        DataReader<custom_types::MotorCmd>{"hip_yaw_left/action"},
-        DataReader<custom_types::MotorCmd>{"hip_yaw_right/action"},
-        DataReader<custom_types::MotorCmd>{"hip_roll_left/action"},
-        DataReader<custom_types::MotorCmd>{"hip_roll_right/action"},
-        DataReader<custom_types::MotorCmd>{"hip_pitch_left/action"},
-        DataReader<custom_types::MotorCmd>{"hip_pitch_right/action"},
-        DataReader<custom_types::MotorCmd>{"knee_left/action"},
-        DataReader<custom_types::MotorCmd>{"knee_right/action"},
-        DataReader<custom_types::MotorCmd>{"ankle_pitch_left/action"},
-        DataReader<custom_types::MotorCmd>{"ankle_pitch_right/action"},
-        DataReader<custom_types::MotorCmd>{"ankle_roll_left/action"},
-        DataReader<custom_types::MotorCmd>{"ankle_roll_right/action"},
-    };
-
-    DataWriter<custom_types::MotorCmd> dw_mtr_cmd_[12] = {
-        DataWriter<custom_types::MotorCmd>{"hip_yaw_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"hip_yaw_right/cmd"},
-        DataWriter<custom_types::MotorCmd>{"hip_roll_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"hip_roll_right/cmd"},
-        DataWriter<custom_types::MotorCmd>{"hip_pitch_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"hip_pitch_right/cmd"},
-        DataWriter<custom_types::MotorCmd>{"knee_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"knee_right/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_pitch_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_pitch_right/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_roll_left/cmd"},
-        DataWriter<custom_types::MotorCmd>{"ankle_roll_right/cmd"},
-    };    
-
-    DataReader<custom_types::MotorState> dr_mtr_stat_[12] = {
-        DataReader<custom_types::MotorState>{"hip_yaw_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"hip_yaw_right/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"hip_roll_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"hip_roll_right/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"hip_pitch_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"hip_pitch_right/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"knee_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"knee_right/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_pitch_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_pitch_right/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_roll_left/state", DependencyType::Weak},
-        DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak},
-    };
-
-    DataReader<custom_types::Imu> dr_imu_{"imu_data", DependencyType::Weak};
-private:
-    static bool is_finite(double v) {
-        return std::isfinite(v);
+    // ── 내부 유틸리티 ──
+    void enter_lock(SafetyLayerState& s, const std::string& reason) {
+        s.mode = SL_LOCK;
+        getLogger()->error("[{}] LOCK: {}", getName(), reason);
     }
 
-    static bool is_finite_cmd(const custom_types::MotorCmd& cmd) {
-        return is_finite(cmd.pos) && is_finite(cmd.vel) && is_finite(cmd.torque) && is_finite(cmd.kp) && is_finite(cmd.kd);
+    bool timeout_exceeded(uint64_t now, uint64_t stamp, double timeout_sec) const {
+        if (stamp == 0) return true;
+        return (now - stamp) > static_cast<uint64_t>(timeout_sec * getFrequency());
     }
 
-    static bool is_finite_state(const custom_types::MotorState& state) {
-        return is_finite(state.pos) && is_finite(state.vel) && is_finite(state.torque) && is_finite(state.temp);
+    static bool is_finite_cmd(const custom_types::MotorCmd& c) {
+        return std::isfinite(c.pos) && std::isfinite(c.vel) &&
+               std::isfinite(c.torque) && std::isfinite(c.kp) && std::isfinite(c.kd);
     }
-
-    custom_types::MotorCmd make_zero_cmd() const {
-        custom_types::MotorCmd cmd{};
-        cmd.pos = 0.0;
-        cmd.vel = 0.0;
-        cmd.torque = 0.0;
-        cmd.kp = 0.0;
-        cmd.kd = 0.0;
-        return cmd;
-    }
-
-    custom_types::MotorCmd blend_cmd(const custom_types::MotorCmd& from, const custom_types::MotorCmd& to, double ratio) const {
-        const double alpha = std::clamp(ratio, 0.0, 1.0);
-        custom_types::MotorCmd cmd{};
-        cmd.pos = alpha * to.pos + (1.0 - alpha) * from.pos;
-        cmd.vel = alpha * to.vel + (1.0 - alpha) * from.vel;
-        cmd.torque = alpha * to.torque + (1.0 - alpha) * from.torque;
-        cmd.kp = alpha * to.kp + (1.0 - alpha) * from.kp;
-        cmd.kd = alpha * to.kd + (1.0 - alpha) * from.kd;
-        return cmd;
+    static bool is_finite_state(const custom_types::MotorState& st) {
+        return std::isfinite(st.pos) && std::isfinite(st.vel) &&
+               std::isfinite(st.torque) && std::isfinite(st.temp);
     }
 
     custom_types::MotorCmd clamp_cmd(const custom_types::MotorCmd& in) {
+        auto san = [](double v) { return std::isfinite(v) ? v : 0.0; };
         custom_types::MotorCmd out{};
-        const auto sanitize = [](double v) {
-            return std::isfinite(v) ? v : 0.0;
-        };
-
-        out.pos = std::clamp(sanitize(in.pos), -p_cmd_pos_limit.read(), p_cmd_pos_limit.read());
-        out.vel = std::clamp(sanitize(in.vel), -p_cmd_vel_limit.read(), p_cmd_vel_limit.read());
-        out.torque = std::clamp(sanitize(in.torque), -p_cmd_torque_limit.read(), p_cmd_torque_limit.read());
-        out.kp = std::clamp(sanitize(in.kp), 0.0, p_cmd_kp_limit.read());
-        out.kd = std::clamp(sanitize(in.kd), 0.0, p_cmd_kd_limit.read());
-        // duration_ms는 모터단 interpolation을 위해 그대로 전달
+        out.pos        = std::clamp(san(in.pos),    -p_cmd_pos_limit.read(),    p_cmd_pos_limit.read());
+        out.vel        = std::clamp(san(in.vel),    -p_cmd_vel_limit.read(),    p_cmd_vel_limit.read());
+        out.torque     = std::clamp(san(in.torque), -p_cmd_torque_limit.read(), p_cmd_torque_limit.read());
+        out.kp         = std::clamp(san(in.kp),     0.0,                        p_cmd_kp_limit.read());
+        out.kd         = std::clamp(san(in.kd),     0.0,                        p_cmd_kd_limit.read());
         out.duration_ms = (std::isfinite(in.duration_ms) && in.duration_ms >= 0.0) ? in.duration_ms : 0.0;
         return out;
     }
 
-    bool timeout_exceeded(uint64_t now_tick, uint64_t stamp_tick, double timeout_sec) const {
-        if (stamp_tick == 0) {
-            return true;
-        }
-        const uint64_t timeout_tick = static_cast<uint64_t>(std::max(0.0, timeout_sec) * static_cast<double>(getFrequency()));
-        return (now_tick - stamp_tick) > timeout_tick;
-    }
-
-    bool all_inputs_ready(const SafetyLayerState& s, bool need_policy_cmd) const {
-        for (int i = 0; i < 12; ++i) {
-            if (!s.manager_cmd_online[i]) {
-                return false;
-            }
-            if (need_policy_cmd && !s.policy_action_online[i]) {
-                return false;
-            }
-            if (!s.motor_state_online[i]) {
-                return false;
-            }
-        }
-        return s.imu_online;
-    }
-
-    void enter_lock(SafetyLayerState& s, const std::string& reason) {
-        s.mode = Mode::LOCK;
-        getLogger()->error("[{}] Enter LOCK mode: {}", getName(), reason);
-    }
-
     bool safety_check(SafetyLayerState& s, std::string& reason) {
-        // return true;    // TEMP: Disable safety checks for now to prevent accidental lockouts during development. Implement proper checks before enabling.
         const uint64_t now = getExecutionLocalTick();
-        const bool need_policy_cmd = (s.mode == Mode::RL || s.use_policy_action);
-        const bool require_manager_fresh = (s.mode != Mode::RL);
-        const bool strict_level = (s.safety_level == SL_STRICT);
+        const auto& pos_lo = p_joint_pos_limit_lower.read();
+        const auto& pos_hi = p_joint_pos_limit_upper.read();
 
-        if (s.prev_safety_level != s.safety_level) {
-            if (strict_level) {
-                // s.safety_armed = false;
-                getLogger()->info("[{}] Safety level -> STRICT", getName());
-            } else {
-                getLogger()->info("[{}] Safety level -> ESSENTIAL", getName());
-            }
-            s.prev_safety_level = s.safety_level;
-        }
-
-        // if (strict_level) {
-        //     if (!s.safety_armed) {
-        //         // if (!all_inputs_ready(s, need_policy_cmd)) {
-        //         //     return true;
-        //         // }
-        //         s.safety_armed = true;
-        //         getLogger()->info("[{}] Strict safety checks armed", getName());
-        //     }
-        // }
-
-        if (strict_level) {
-            for (int i = 0; i < 12; ++i) {
-                if (require_manager_fresh) {
-                    if (!s.manager_cmd_online[i] || timeout_exceeded(now, s.manager_cmd_tick[i], p_cmd_timeout_sec.read())) {
-                        reason = "manager command timeout (joint " + std::to_string(i) + ")";
-                        return false;
-                    }
-                }
-
-                if (need_policy_cmd && (!s.policy_action_online[i] || timeout_exceeded(now, s.policy_action_tick[i], p_cmd_timeout_sec.read()))) {
-                    reason = "policy action timeout (joint " + std::to_string(i) + ")";
-                    return false;
-                }
-
-                if (!s.motor_state_online[i] || timeout_exceeded(now, s.motor_state_tick[i], p_state_timeout_sec.read())) {
-                    reason = "motor state timeout (joint " + std::to_string(i) + ")";
-                    return false;
-                }
-            }
-
-            if (!s.imu_online || timeout_exceeded(now, s.imu_tick, p_imu_timeout_sec.read())) {
-                reason = "imu timeout";
+        for (int i = 0; i < SL_N; i++) {
+            // 명령 타임아웃
+            if (s.manager_cmd_online[i] &&
+                timeout_exceeded(now, s.manager_cmd_tick[i], p_cmd_timeout_sec.read())) {
+                reason = "manager cmd timeout (joint " + std::to_string(i) + ")";
                 return false;
             }
-        }
-
-        for (int i = 0; i < 12; ++i) {
-            if (!s.motor_state_online[i]) {
-                return true;
+            // 상태 타임아웃
+            if (s.motor_state_online[i] &&
+                timeout_exceeded(now, s.motor_state_tick[i], p_state_timeout_sec.read())) {
+                reason = "motor state timeout (joint " + std::to_string(i) + ")";
+                return false;
             }
-        }
 
-        if (strict_level) {
-            if (!s.imu_online) {
-                return true;
-            }
-        }
+            if (!s.motor_state_online[i]) continue;
 
-        for (int i = 0; i < 12; ++i) {
+            // NaN/Inf 검사
             if (!is_finite_cmd(s.manager_cmd[i])) {
-                reason = "manager command has non-finite value (joint " + std::to_string(i) + ")";
+                reason = "manager cmd non-finite (joint " + std::to_string(i) + ")";
                 return false;
             }
-
-            if (need_policy_cmd && !is_finite_cmd(s.policy_action[i])) {
-                reason = "policy action has non-finite value (joint " + std::to_string(i) + ")";
-                return false;
-            }
-
             if (!is_finite_state(s.motor_state[i])) {
-                reason = "motor state has non-finite value (joint " + std::to_string(i) + ")";
+                reason = "motor state non-finite (joint " + std::to_string(i) + ")";
                 return false;
             }
 
-            {
-                const auto& pos_lower = p_joint_pos_limit_lower.read();
-                const auto& pos_upper = p_joint_pos_limit_upper.read();
-                const double pos = s.motor_state[i].pos;
-                if (pos < pos_lower[i] || pos > pos_upper[i]) {
-                    reason = "joint position limit exceeded (joint " + std::to_string(i) + "): " +
-                             std::to_string(pos_lower[i]) + " <= " +
-                             std::to_string(pos) + " <= " +
-                             std::to_string(pos_upper[i]) + " violated";
+            // 위치 한계 (tolerance 만큼 여유 허용)
+            double pos = s.motor_state[i].pos;
+            if ((int)pos_lo.size() > i && (int)pos_hi.size() > i) {
+                const double tol = p_pos_tolerance.read();
+                if (pos < pos_lo[i] - tol || pos > pos_hi[i] + tol) {
+                    reason = "joint " + std::to_string(i) + " pos=" + std::to_string(pos)
+                             + " out of [" + std::to_string(pos_lo[i] - tol) + ","
+                             + std::to_string(pos_hi[i] + tol) + "]";
                     return false;
                 }
             }
 
+            // 속도 한계
             if (std::abs(s.motor_state[i].vel) > p_joint_vel_limit.read()) {
-                reason = "joint velocity limit exceeded (joint " + std::to_string(i) + "): |" +
-                         std::to_string(s.motor_state[i].vel) + "| > " +
-                         std::to_string(p_joint_vel_limit.read());
+                reason = "joint " + std::to_string(i) + " vel=" +
+                         std::to_string(s.motor_state[i].vel) + " exceeds limit";
                 return false;
             }
 
+            // 토크 한계
             if (std::abs(s.motor_state[i].torque) > p_joint_torque_limit.read()) {
-                reason = "joint torque limit exceeded (joint " + std::to_string(i) + "): |" +
-                         std::to_string(s.motor_state[i].torque) + "| > " +
-                         std::to_string(p_joint_torque_limit.read());
+                reason = "joint " + std::to_string(i) + " torque=" +
+                         std::to_string(s.motor_state[i].torque) + " exceeds limit";
                 return false;
             }
 
+            // 온도 한계
             if (s.motor_state[i].temp > p_joint_temp_limit_c.read()) {
-                reason = "joint temperature limit exceeded (joint " + std::to_string(i) + "): " +
-                         std::to_string(s.motor_state[i].temp) + " > " +
-                         std::to_string(p_joint_temp_limit_c.read());
+                reason = "joint " + std::to_string(i) + " temp=" +
+                         std::to_string(s.motor_state[i].temp) + " exceeds limit";
                 return false;
             }
-        }
-
-        if (!strict_level) {
-            return true;
-        }
-
-        const double qw = s.imu.orientation.w;
-        const double qx = s.imu.orientation.x;
-        const double qy = s.imu.orientation.y;
-        const double qz = s.imu.orientation.z;
-
-        if (!is_finite(qw) || !is_finite(qx) || !is_finite(qy) || !is_finite(qz)) {
-            reason = "imu quaternion has non-finite value";
-            return false;
-        }
-
-        const double qnorm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-        if (qnorm < std::numeric_limits<double>::epsilon() || std::abs(qnorm - 1.0) > p_imu_quat_norm_tol.read()) {
-            reason = "imu quaternion norm invalid";
-            return false;
-        }
-
-        const Eigen::Quaterniond q(qw / qnorm, qx / qnorm, qy / qnorm, qz / qnorm);
-        // 로봇 body z축을 월드 프레임으로 회전 → 월드 up [0,0,1]과의 내적 = cos(tilt)
-        // eulerAngles()는 특이점(gimbal lock)에서 ±π로 점프하는 문제가 있으므로
-        // 중력 벡터 내적 기반 tilt 각도로 판정한다.
-        const Eigen::Vector3d body_up_in_world = q * Eigen::Vector3d::UnitZ();
-        const double cos_tilt = std::clamp(body_up_in_world.z(), -1.0, 1.0);
-        const double tilt_rad = std::acos(cos_tilt);
-        const double max_tilt_rad = p_imu_tilt_limit_deg.read() * M_PI / 180.0;
-
-        if (tilt_rad > max_tilt_rad) {
-            reason = "imu tilt limit exceeded (tilt=" + std::to_string(tilt_rad * 180.0 / M_PI) + " deg)";
-            return false;
         }
 
         return true;

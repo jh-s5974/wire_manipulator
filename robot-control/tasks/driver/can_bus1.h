@@ -1,611 +1,508 @@
 #pragma once
 
+// CAN Bus 1 — Joint 2, 3, 4 (와이어/볼스크류 구동)
+//
+// 물리 모터 배치:
+//   motors[0] = MyActuatorX6 0x03  →  Joint 2 (하단링크길이, 볼스크류)
+//   motors[1] = MyActuatorX6 0x04  →  Joint 3 (팔꿈치 피치, 와이어 A)
+//   motors[2] = MyActuatorX6 0x05  →  Joint 3 (팔꿈치 피치, 와이어 B)
+//   motors[3] = MyActuatorX6 0x06  →  Joint 4 (상단링크길이, 와이어 A)
+//   motors[4] = MyActuatorX6 0x07  →  Joint 4 (상단링크길이, 와이어 B)
+//
+// 가상 조인트 인덱스 (this file 내부):
+//   ji=0 → joint2,  ji=1 → joint3,  ji=2 → joint4
+
 #include <rtfw/task.h>
 #include "../util.hpp"
 #include "../custom_types.hpp"
 #include "motor.impl.hpp"
-#include "../kin_2rsu.hpp"
+#include "../kin_manipulator.hpp"
 
 #include <chrono>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
+#include <cmath>
+#include <cstring>
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <linux/can.h>
+#include <linux/can/error.h>
+#include <linux/can/raw.h>
+#include <memory>
 #include <net/if.h>
+#include <stdio.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <linux/can.h>
-#include <linux/can/raw.h>
-#include <linux/can/error.h>
-#include <inttypes.h>
-#include <cmath>
-#include <chrono>
-#include <thread>
-#include <vector>
-#include <memory>
-#include <csignal>
-#include <fcntl.h>
-#include <arpa/inet.h> // ntohs 사용을 위해 추가
-#include <errno.h>
 #include <sys/wait.h>
-
-
-
+#include <thread>
+#include <unistd.h>
+#include <vector>
 
 using namespace std::chrono_literals;
 using namespace rtfw;
 using namespace rtfw::rt;
 
-
 namespace task_pool {
 
+class CanBus1 : public ITask {
+public:
+    const char* getName() const override { return "CanBus1"; }
 
-    class CanBus1 : public ITask {
-    public:
-        const char* getName() const override { return "CanBus1"; }
+    static constexpr int NM = 5; // 물리 모터 수
+    static constexpr int NJ = 3; // 가상 조인트 수 (joint2=ji0, joint3=ji1, joint4=ji2)
 
-        void initialize(void*) override {
-            for (auto& flag: on_flag) flag = false;
-            for (auto& s: motor_sync_) s = false;
-            for (auto& p: joint_feedback_pos_) p = 0.0;
+    // 조인트 ji의 가상 조인트 이름 (데이터 채널용)
+    // ji0=joint2, ji1=joint3, ji2=joint4
+    static constexpr const char* joint_name[NJ] = {"joint2", "joint3", "joint4"};
 
-            for (auto& cmd: cmds) {
-                cmd.kp = 0;
-                cmd.kd = 0;
-                cmd.pos = 0;
-                cmd.vel = 0;
-                cmd.torque = 0;
-            }
-            for (auto& interp: cmd_interp) interp = {};
+    void initialize(void*) override {
+        for (auto& f : joint_on)     f = false;
+        for (auto& s : motor_sync_)  s = false;
+        for (auto& p : joint_fb_pos_) p = 0.0;
+        for (auto& c : joint_cmds)   c = {};
+        for (auto& i : cmd_interp)   i = {};
+    }
+
+    void execute(void*) override {
+        // 1. 상위 조인트 명령 수신
+        for (int ji = 0; ji < NJ; ji++) {
+            dr_joint_cmd[ji].on_update([&, ji](const custom_types::MotorCmd& data) {
+                cmd_wdt[ji] = getExecutionLocalTick();
+                if (data.duration_ms > 0.0) {
+                    if (!cmd_interp[ji].active ||
+                        std::abs(data.pos - cmd_interp[ji].target_pos) > 1e-4) {
+                        cmd_interp[ji].start_ref   = joint_fb_pos_[ji];
+                        cmd_interp[ji].target_pos  = data.pos;
+                        cmd_interp[ji].duration_ms = data.duration_ms;
+                        cmd_interp[ji].elapsed_ms  = 0.0;
+                        cmd_interp[ji].active       = true;
+                    }
+                } else {
+                    cmd_interp[ji].active = false;
+                    joint_cmds[ji].pos = data.pos;
+                }
+                joint_cmds[ji].vel    = data.vel;
+                joint_cmds[ji].torque = data.torque;
+                joint_cmds[ji].kp     = data.kp;
+                joint_cmds[ji].kd     = data.kd;
+            });
+
+            // 조인트 on/off → 해당 물리 모터 제어
+            dr_joint_on[ji].on_update([&, ji](const bool& on) {
+                if (!joint_on[ji] && on) {
+                    getLogger()->info("[{}] Joint {} ON", getName(), ji + 2);
+                    joint_on[ji] = true;
+                    cmd_interp[ji] = {};
+                    for (int mi : joint_motors(ji)) {
+                        motor_sync_[mi] = false;
+                        if (so > 0) motors[mi]->Start(so);
+                    }
+                }
+                if (joint_on[ji] && !on) {
+                    getLogger()->info("[{}] Joint {} OFF", getName(), ji + 2);
+                    joint_on[ji] = false;
+                    cmd_interp[ji] = {};
+                    for (int mi : joint_motors(ji)) {
+                        motor_sync_[mi] = false;
+                        if (so > 0) motors[mi]->Stop(so);
+                    }
+                }
+            });
         }
 
-        void execute(void*) override {
-            std::array<bool, 6> cmd_updated;
-            cmd_updated.fill(false);
-            for (int i=0; i<cmds.size(); i++) {
-                dr_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
-                    cmd_wdt[i] = getExecutionLocalTick();
-                    if (data.duration_ms > 0.0) {
-                        // 새 타겟이거나 처음 진입할 때만 interpolation 시작
-                        if (!cmd_interp[i].active || std::abs(data.pos - cmd_interp[i].target_pos) > 1e-4) {
-                            cmd_interp[i].start_ref = joint_feedback_pos_[i]; // 실제 피드백(발목은 FK 변환값)에서 시작
-                            cmd_interp[i].target_pos = data.pos;
-                            cmd_interp[i].duration_ms = data.duration_ms;
-                            cmd_interp[i].elapsed_ms = 0.0;
-                            cmd_interp[i].active = true;
-                        }
-                        // 같은 타겟이면 계속 진행
-                    } else {
-                        // 즉시 명령: interpolation 취소, ref 즉시 갱신
-                        cmd_interp[i].active = false;
-                        cmds[i].pos = data.pos;
+        if (so > 0) {
+            // 2. CAN 수신 및 피드백 처리
+            struct can_frame rx;
+            while (read(so, &rx, sizeof(rx)) > 0) {
+                if (rx.can_id & CAN_ERR_FLAG) {
+                    if (rx.can_id & CAN_ERR_BUSOFF) {
+                        getLogger()->error("[{}] CAN bus-off! Restarting...", getName());
+                        restart_required = true;
+                    } else if (rx.can_id & CAN_ERR_BUSERROR) {
+                        getLogger()->warn("[{}] CAN bus error", getName());
                     }
-                    cmds[i].vel = data.vel;
-                    cmds[i].torque = data.torque;
-                    cmds[i].kp = data.kp;
-                    cmds[i].kd = data.kd;
-                    cmd_updated[i] = true;
-                });
-
-                dr_motor_on[i].on_update([&, i](const bool& on) {
-                    if (!on_flag[i] && on) {
-                        getLogger()->info("[{}] Motor {} ON", getName(), i);
-                        on_flag[i] = on;
-                        motor_sync_[i] = false; // Start 후 피드백 수신 시 동기화
-                        cmd_interp[i] = {};
-                        if (so > 0) motors[i]->Start(so);
-                    }
-                    if (on_flag[i] && !on) {
-                        getLogger()->info("[{}] Motor {} OFF", getName(), i);
-                        on_flag[i] = on;
-                        motor_sync_[i] = false;
-                        cmd_interp[i] = {};
-                        if (so > 0) motors[i]->Stop(so);
-                    }
-                });
-            }
-
-            // if (cmd_updated[4] || cmd_updated[5]) {
-            //     auto theta = kin_2rsu::ankle_ik(cmds[4].pos, cmds[5].pos, 'l');
-            //     cmds[4].pos = theta(0);
-            //     cmds[5].pos = theta(1);
-            // }
-
-            if (so > 0) {
-                struct can_frame rx;
-                while (read(so, &rx, sizeof(rx)) > 0) {
-                    // 에러 프레임 감지 (bus-off, 버스 에러)
-                    if (rx.can_id & CAN_ERR_FLAG) {
-                        if (rx.can_id & CAN_ERR_BUSOFF) {
-                            getLogger()->error("[{}] CAN bus-off detected! Trying controller restart...", getName());
-                            restart_required = true;
-                        }
-                        else if (rx.can_id & CAN_ERR_BUSERROR) {
-                            getLogger()->warn("[{}] CAN bus error detected", getName());
-                        }
-                        can_close();
-                        break;
-                    }
-                    for (auto i=0; i<motors.size(); i++) {
-                        if (motors[i]->isMyFrame(&rx)) {
-                            if (motors[i]->parseFeedback(&rx)) {
-                                com_wdt[i] = getExecutionLocalTick();
-
-                                // 동기화 미완료 상태: 피드백 위치로 동기화 후 제어 허용
-                                if (!motor_sync_[i]) {
-                                    if (i < 4) {
-                                        joint_feedback_pos_[i] = motors[i]->state.pos;
-                                        cmds[i].pos = joint_feedback_pos_[i];
-                                    }
-                                    cmd_interp[i] = {};
-                                    motor_sync_[i] = true;
-                                    getLogger()->info("[{}] Motor {} synced at pos={:.3f}", getName(), i, motors[i]->state.pos);
-                                }
-
-                                custom_types::MotorState state{};
-                                state.pos = motors[i]->state.pos;
-                                state.vel = motors[i]->state.vel;
-                                state.torque = motors[i]->state.torque;
-                                state.status = motors[i]->state.status;
-                                state.enabled = on_flag[i];
-                                dw_mtr_stat[i].write(state);
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                const auto ankle_fb = map_theta_to_rp(
-                    static_cast<float>(motors[4]->state.pos),
-                    static_cast<float>(motors[5]->state.pos),
-                    static_cast<float>(motors[4]->state.vel),
-                    static_cast<float>(motors[5]->state.vel),
-                    static_cast<float>(motors[4]->state.torque),
-                    static_cast<float>(motors[5]->state.torque),
-                    'r');
-                joint_feedback_pos_[4] = ankle_fb.rp(0);
-                joint_feedback_pos_[5] = ankle_fb.rp(1);
-
-                if (motor_sync_[4] && motor_sync_[5]) {
-                    cmds[4].pos = joint_feedback_pos_[4];
-                    cmds[5].pos = joint_feedback_pos_[5];
-                }
-
-                // 가상 pitch/roll 상태 발행 (실모터 upper/lower 피드백 -> FK)
-                custom_types::MotorState ankle_pitch_state{};
-                ankle_pitch_state.pos = ankle_fb.rp(0);
-                ankle_pitch_state.vel = ankle_fb.rp_vel(0);
-                ankle_pitch_state.torque = ankle_fb.rp_tau(0);
-                ankle_pitch_state.status = (motors[4]->state.status || motors[5]->state.status);
-                ankle_pitch_state.enabled = on_flag[4] && on_flag[5];
-                dw_mtr_stat[6].write(ankle_pitch_state);
-
-                custom_types::MotorState ankle_roll_state{};
-                ankle_roll_state.pos = ankle_fb.rp(1);
-                ankle_roll_state.vel = ankle_fb.rp_vel(1);
-                ankle_roll_state.torque = ankle_fb.rp_tau(1);
-                ankle_roll_state.status = (motors[4]->state.status || motors[5]->state.status);
-                ankle_roll_state.enabled = on_flag[4] && on_flag[5];
-                dw_mtr_stat[7].write(ankle_roll_state);
-
-                // 2. 모터단 interpolation 진행 및 제어 명령 송신
-                const double dt_ms = 1000.0 / getFrequency();
-                std::array<MotorCommand, 6> motor_cmds = cmds;
-                std::array<MotorCommand, 6> applied_motor_cmds{};
-                std::array<bool, 6> motor_ready{};
-                int offline = 0;
-                auto tick = getExecutionLocalTick();
-                for (auto i=0; i<motors.size(); i++) {
-                    if (tick - com_wdt[i] > 1 * getFrequency()) {
-                        motors[i]->state.online = false;
-                        offline++;
-                        // 피드백 타임아웃: 동기화 해제 및 interpolation 취소
-                        if (motor_sync_[i]) {
-                            motor_sync_[i] = false;
-                            cmd_interp[i] = {};
-                            getLogger()->warn("[{}] Motor {} feedback timeout, re-sync required", getName(), i);
-                        }
-                    }
-
-                    // interpolation 진행: cmds[i].pos를 현재 ref로 갱신
-                    if (cmd_interp[i].active) {
-                        cmd_interp[i].elapsed_ms += dt_ms;
-                        const double ratio = std::min(cmd_interp[i].elapsed_ms / cmd_interp[i].duration_ms, 1.0);
-                        cmds[i].pos = cmd_interp[i].start_ref + ratio * (cmd_interp[i].target_pos - cmd_interp[i].start_ref);
-                        if (ratio >= 1.0) {
-                            cmd_interp[i].active = false;
-                        }
-                    }
-                }
-
-                // pitch/roll 명령 -> upper/lower 모터 명령 변환 (IK)
-                const auto ankle_cmd = map_rp_to_theta(
-                    static_cast<float>(cmds[4].pos),
-                    static_cast<float>(cmds[5].pos),
-                    static_cast<float>(cmds[4].vel),
-                    static_cast<float>(cmds[5].vel),
-                    static_cast<float>(cmds[4].torque),
-                    static_cast<float>(cmds[5].torque),
-                    'r');
-                motor_cmds[4].pos = ankle_cmd.theta(0);
-                motor_cmds[5].pos = ankle_cmd.theta(1);
-                motor_cmds[4].vel = ankle_cmd.theta_vel(0);
-                motor_cmds[5].vel = ankle_cmd.theta_vel(1);
-                motor_cmds[4].torque = ankle_cmd.theta_tau(0);
-                motor_cmds[5].torque = ankle_cmd.theta_tau(1);
-
-                for (auto i=0; i<motors.size(); i++) {
-                    const bool motor_on = on_flag[i];
-                    const bool cmd_alive = (tick - cmd_wdt[i] <= 1 * getFrequency());
-                    const bool ready = motor_on && motor_sync_[i] && cmd_alive;
-                    motor_ready[i] = ready;
-
-                    const MotorCommand applied_cmd = ready ? motor_cmds[i] : MotorCommand{};
-                    applied_motor_cmds[i] = applied_cmd;
-                    custom_types::MotorCmd applied{};
-                    applied.pos = applied_cmd.pos;
-                    applied.vel = applied_cmd.vel;
-                    applied.torque = applied_cmd.torque;
-                    applied.kp = applied_cmd.kp;
-                    applied.kd = applied_cmd.kd;
-                    dw_mtr_cmd_applied[i].write(applied);
-
-                    if (ready) {
-                        motors[i]->Control(so, motor_cmds[i]);
-                    } else {
-                        MotorCommand zero_cmd{};
-                        motors[i]->Control(so, zero_cmd);
-                    }
-                }
-
-                // 가상 pitch/roll cmd_applied 발행 (실적용 upper/lower -> FK)
-                custom_types::MotorCmd applied_pitch{};
-                custom_types::MotorCmd applied_roll{};
-                if (motor_ready[4] && motor_ready[5]) {
-                    const auto ankle_applied = map_theta_to_rp(
-                        static_cast<float>(applied_motor_cmds[4].pos),
-                        static_cast<float>(applied_motor_cmds[5].pos),
-                        static_cast<float>(applied_motor_cmds[4].vel),
-                        static_cast<float>(applied_motor_cmds[5].vel),
-                        static_cast<float>(applied_motor_cmds[4].torque),
-                        static_cast<float>(applied_motor_cmds[5].torque),
-                        'r');
-                    applied_pitch.pos = ankle_applied.rp(0);
-                    applied_roll.pos = ankle_applied.rp(1);
-                    applied_pitch.vel = ankle_applied.rp_vel(0);
-                    applied_roll.vel = ankle_applied.rp_vel(1);
-                    applied_pitch.torque = ankle_applied.rp_tau(0);
-                    applied_roll.torque = ankle_applied.rp_tau(1);
-                    applied_pitch.kp = cmds[4].kp;
-                    applied_roll.kp = cmds[5].kp;
-                    applied_pitch.kd = cmds[4].kd;
-                    applied_roll.kd = cmds[5].kd;
-                }
-                dw_mtr_cmd_applied[6].write(applied_pitch);
-                dw_mtr_cmd_applied[7].write(applied_roll);
-
-                PERIODIC_CALL(
-                    for (auto i=0; i<motors.size(); i++) {
-                        if (!motors[i]->state.online)
-                            getLogger()->warn("[{}] Motor {} seems offline. Sending start command", getName(), motors[i]->id);
-                    }
-                , 1s);
-
-
-                if (offline < cmds.size()) {
-                    can_wdt = getExecutionLocalTick();
-                }
-                if (getExecutionLocalTick() - can_wdt > 3 * getFrequency()) {
-                    PERIODIC_CALL(
-                        getLogger()->warn("[{}] All motors seem offline. Check connections!", getName());
-                    , 1s);
                     can_close();
-                }
-            }
-            else {
-                if (getExecutionLocalTick() % getFrequency() == 0) {
-                    getLogger()->info("[{}] try connection", getName());
-                    so = can_open(const_cast<char*>(p_port.read().c_str()));
-                    if (so > 0) {
-                        can_wdt = getExecutionLocalTick();
-                        for (auto& t: cmd_wdt)  t = getExecutionLocalTick();
-                        for (auto& t: com_wdt)  t = getExecutionLocalTick();
-                        for (auto& mtr: motors) mtr->Start(so, true);
-                        for (auto& on: on_flag) on = false;
-                    }
-                }
-            }
-
-            dw_state.write(so > 0);
-        }
-
-        bool onOverrun() override {
-            // if (getExecutionLocalTick() > 1 * getFrequency()) {
-            //     return false;
-            // }
-            return true;  // 기본: 복구 불가능
-        }
-
-        ~CanBus1() {
-            if (so > 0) {
-                for (auto& motor : motors) {
-                    motor->Stop(so);
-                }
-                can_close();
-            }
-        }
-    private:
-        struct AnkleRpMapping {
-            Vector2f rp = Vector2f::Zero();
-            Matrix2f jac = Matrix2f::Zero();
-            Vector2f rp_vel = Vector2f::Zero();
-            Vector2f rp_tau = Vector2f::Zero();
-        };
-
-        struct AnkleThetaMapping {
-            Vector2f theta = Vector2f::Zero();
-            Matrix2f jac = Matrix2f::Zero();
-            Vector2f theta_vel = Vector2f::Zero();
-            Vector2f theta_tau = Vector2f::Zero();
-        };
-
-        static inline Matrix2f safe_inverse(const Matrix2f& m) {
-            if (std::abs(m.determinant()) > 1e-6f) {
-                return m.inverse();
-            }
-            return Matrix2f::Zero();
-        }
-
-        static inline Matrix2f safe_inverse_transpose(const Matrix2f& m) {
-            return safe_inverse(m.transpose());
-        }
-
-        static inline AnkleRpMapping map_theta_to_rp(
-            float theta_upper, float theta_lower,
-            float theta_vel_upper, float theta_vel_lower,
-            float theta_tau_upper, float theta_tau_lower,
-            char side) {
-            AnkleRpMapping out;
-            std::tie(out.rp, out.jac) = kin_2rsu::ankle_fk(theta_upper, theta_lower, side);
-            const Vector2f theta_vel(theta_vel_upper, theta_vel_lower);
-            const Vector2f theta_tau(theta_tau_upper, theta_tau_lower);
-            out.rp_vel = out.jac * theta_vel;
-            out.rp_tau = safe_inverse_transpose(out.jac) * theta_tau;
-            return out;
-        }
-
-        static inline AnkleThetaMapping map_rp_to_theta(
-            float rp_r, float rp_p,
-            float rp_vel_r, float rp_vel_p,
-            float rp_tau_r, float rp_tau_p,
-            char side) {
-            AnkleThetaMapping out;
-            out.theta = kin_2rsu::ankle_ik(rp_r, rp_p, side);
-            out.jac = kin_2rsu::ankle_J(rp_r, rp_p, out.theta(0), out.theta(1), side);
-            const Vector2f rp_vel(rp_vel_r, rp_vel_p);
-            const Vector2f rp_tau(rp_tau_r, rp_tau_p);
-            out.theta_vel = safe_inverse(out.jac) * rp_vel;
-            out.theta_tau = out.jac.transpose() * rp_tau;
-            return out;
-        }
-
-        DataWriter<bool> dw_state{"can1_state", ArchiveOption::Enable};
-            
-        DataWriter<custom_types::MotorState> dw_mtr_stat[8] = {
-            DataWriter<custom_types::MotorState>{"hip_yaw_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"hip_roll_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"hip_pitch_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"knee_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_upper_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_lower_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_pitch_right/state", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorState>{"ankle_roll_right/state", ArchiveOption::Enable},
-        };
-
-        DataReader<custom_types::MotorCmd> dr_mtr_cmd[6] = {
-            DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd"},
-            DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd"},
-            DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd"},
-            DataReader<custom_types::MotorCmd>{"knee_right/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd"},
-            DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd"},
-        };
-        DataWriter<custom_types::MotorCmd> dw_mtr_cmd_applied[8] = {
-            DataWriter<custom_types::MotorCmd>{"hip_yaw_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"hip_roll_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"knee_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_upper_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_lower_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied", ArchiveOption::Enable},
-            DataWriter<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", ArchiveOption::Enable},
-        };
-        DataReader<bool> dr_motor_on[6] = {
-            DataReader<bool>{"hip_yaw_right/on"},
-            DataReader<bool>{"hip_roll_right/on"},
-            DataReader<bool>{"hip_pitch_right/on"},
-            DataReader<bool>{"knee_right/on"},
-            DataReader<bool>{"ankle_pitch_right/on"},
-            DataReader<bool>{"ankle_roll_right/on"},
-        };
-
-        Parameter<std::string> p_port{"can1.port", "can1"};
-        
-
-    private:
-
-        bool run_ip_command(const char* port, const char* action, bool log_failure = true) {
-            char cmd[256];
-            snprintf(cmd, sizeof(cmd), "ip link set dev %s %s", port, action);
-            const int ret = system(cmd);
-            if (ret == -1) {
-                if (log_failure) {
-                    getLogger()->error("[{}] Failed to execute '{}'", getName(), cmd);
-                }
-                return false;
-            }
-            if (!WIFEXITED(ret) || WEXITSTATUS(ret) != 0) {
-                if (log_failure) {
-                    getLogger()->error("[{}] Command failed (exit={}): {}", getName(), WIFEXITED(ret) ? WEXITSTATUS(ret) : -1, cmd);
-                }
-                return false;
-            }
-            return true;
-        }
-
-        bool is_link_up(const char* port) {
-            int fd = socket(AF_INET, SOCK_DGRAM, 0);
-            if (fd < 0) {
-                getLogger()->warn("[{}] Failed to inspect CAN interface {}: {}", getName(), port, strerror(errno));
-                return false;
-            }
-
-            struct ifreq ifr {};
-            strncpy(ifr.ifr_name, port, IFNAMSIZ - 1);
-            const bool ok = ioctl(fd, SIOCGIFFLAGS, &ifr) == 0;
-            const bool is_up = ok && (ifr.ifr_flags & IFF_UP);
-            if (!ok) {
-                getLogger()->warn("[{}] Failed to read flags for {}: {}", getName(), port, strerror(errno));
-            }
-
-            close(fd);
-            return is_up;
-        }
-
-        void reset_can_state() {
-            can_wdt = 0;
-            for (auto& t : cmd_wdt) t = 0;
-            for (auto& t : com_wdt) t = 0;
-            for (auto& mtr : motors) {
-                mtr->state.online = false;
-            }
-            for (auto& s : motor_sync_) s = false;
-            for (auto& interp : cmd_interp) interp = {};
-        }
-
-        bool can_ifup(const char* port) {
-            reset_can_state();
-
-            const char* config_attempts[] = {
-                "up type can bitrate 1000000 restart-ms 100 berr-reporting on",
-                "up type can bitrate 1000000 restart-ms 100",
-                "up type can bitrate 1000000"
-            };
-
-            bool brought_up = false;
-            for (const char* action : config_attempts) {
-                if (run_ip_command(port, action, false)) {
-                    brought_up = true;
-                    getLogger()->info("[{}] {} reset and brought up with '{}'", getName(), port, action);
                     break;
                 }
-
-                getLogger()->warn("[{}] {} does not accept '{}', trying a simpler CAN setup", getName(), port, action);
+                for (int mi = 0; mi < NM; mi++) {
+                    if (motors[mi]->isMyFrame(&rx) && motors[mi]->parseFeedback(&rx)) {
+                        com_wdt[mi] = getExecutionLocalTick();
+                        // 해당 물리 모터의 조인트가 아직 동기화 안 된 경우 처리
+                        try_sync_joint(motor_joint(mi));
+                        break;
+                    }
+                }
             }
 
-            if (!brought_up) {
-                getLogger()->error("[{}] Failed to configure {}. Check interface support or permissions.", getName(), port);
-                return false;
+            // 피드백 FK → 가상 조인트 상태 발행
+            publish_joint_states();
+
+            // 3. Interpolation 진행 및 모터 명령 송신
+            const double dt_ms = 1000.0 / getFrequency();
+            auto tick = getExecutionLocalTick();
+            int offline = 0;
+
+            for (int mi = 0; mi < NM; mi++) {
+                if (tick - com_wdt[mi] > 1 * getFrequency()) {
+                    motors[mi]->state.online = false;
+                    offline++;
+                    if (motor_sync_[mi]) {
+                        motor_sync_[mi] = false;
+                        int ji = motor_joint(mi);
+                        cmd_interp[ji] = {};
+                        getLogger()->warn("[{}] Motor[{}] timeout, re-sync required", getName(), mi);
+                    }
+                }
             }
-            return true;
+
+            // Interpolation: 가상 조인트 공간에서 진행
+            for (int ji = 0; ji < NJ; ji++) {
+                if (cmd_interp[ji].active) {
+                    cmd_interp[ji].elapsed_ms += dt_ms;
+                    const double ratio = std::min(cmd_interp[ji].elapsed_ms / cmd_interp[ji].duration_ms, 1.0);
+                    joint_cmds[ji].pos = cmd_interp[ji].start_ref + ratio * (cmd_interp[ji].target_pos - cmd_interp[ji].start_ref);
+                    if (ratio >= 1.0) cmd_interp[ji].active = false;
+                }
+            }
+
+            // IK → 물리 모터 명령 송신
+            send_motor_commands(tick, offline);
+
+            PERIODIC_CALL(
+                for (int mi = 0; mi < NM; mi++) {
+                    if (!motors[mi]->state.online)
+                        getLogger()->warn("[{}] Motor[{}] (0x{:02X}) offline", getName(), mi, motors[mi]->id);
+                }
+            , 1s);
+
+            if (offline < NM) can_wdt = getExecutionLocalTick();
+            if (getExecutionLocalTick() - can_wdt > 3 * getFrequency()) {
+                PERIODIC_CALL(getLogger()->warn("[{}] All motors offline!", getName());, 1s);
+                can_close();
+            }
+        } else {
+            if (getExecutionLocalTick() % getFrequency() == 0) {
+                getLogger()->info("[{}] try connection", getName());
+                so = can_open(const_cast<char*>(p_port.read().c_str()));
+                if (so > 0) {
+                    can_wdt = getExecutionLocalTick();
+                    for (auto& t : cmd_wdt) t = getExecutionLocalTick();
+                    for (auto& t : com_wdt) t = getExecutionLocalTick();
+                    for (auto& m : motors)  m->Start(so, true);
+                    for (auto& f : joint_on) f = false;
+                }
+            }
         }
 
-        bool can_restart(const char* port) {
-            if (run_ip_command(port, "restart", false)) {
-                getLogger()->info("[{}] {} controller restart requested", getName(), port);
-                return true;
+        dw_state.write(so > 0);
+    }
+
+    bool onOverrun() override { return true; }
+
+    ~CanBus1() {
+        if (so > 0) {
+            for (auto& m : motors) m->Stop(so);
+            can_close();
+        }
+    }
+
+private:
+    // ── 조인트↔모터 인덱스 매핑 헬퍼 ──
+
+    // 가상 조인트 ji에 속한 물리 모터 인덱스 목록
+    static std::vector<int> joint_motors(int ji) {
+        switch (ji) {
+            case 0: return {0};        // joint2: motors[0]
+            case 1: return {1, 2};     // joint3: motors[1], motors[2]
+            case 2: return {3, 4};     // joint4: motors[3], motors[4]
+            default: return {};
+        }
+    }
+
+    // 물리 모터 mi가 속한 가상 조인트 ji
+    static int motor_joint(int mi) {
+        if (mi == 0) return 0;
+        if (mi == 1 || mi == 2) return 1;
+        return 2; // mi == 3 || mi == 4
+    }
+
+    // ji의 모든 모터가 동기화됐는지 확인
+    bool joint_fully_synced(int ji) const {
+        for (int mi : joint_motors(ji))
+            if (!motor_sync_[mi]) return false;
+        return true;
+    }
+
+    // ── 피드백 FK ──
+
+    double compute_joint_fk(int ji) const {
+        switch (ji) {
+            case 0: return kin_manip::joint2_motor_to_joint(motors[0]->state.pos);
+            case 1: return kin_manip::joint3_motors_to_joint(motors[1]->state.pos, motors[2]->state.pos);
+            case 2: return kin_manip::joint4_motors_to_joint(motors[3]->state.pos, motors[4]->state.pos);
+            default: return 0.0;
+        }
+    }
+
+    double compute_joint_vel_fk(int ji) const {
+        switch (ji) {
+            case 0: return kin_manip::joint2_vel_motor_to_joint(motors[0]->state.vel);
+            case 1: return kin_manip::joint3_vel_motors_to_joint(motors[1]->state.vel, motors[2]->state.vel);
+            case 2: return kin_manip::joint4_vel_motors_to_joint(motors[3]->state.vel, motors[4]->state.vel);
+            default: return 0.0;
+        }
+    }
+
+    double compute_joint_torque_fk(int ji) const {
+        switch (ji) {
+            case 0: return kin_manip::joint2_torque_motor_to_joint(motors[0]->state.torque);
+            case 1: return kin_manip::joint3_torque_motors_to_joint(motors[1]->state.torque, motors[2]->state.torque);
+            case 2: return kin_manip::joint4_torque_motors_to_joint(motors[3]->state.torque, motors[4]->state.torque);
+            default: return 0.0;
+        }
+    }
+
+    // 피드백 수신 시 조인트 동기화 시도
+    void try_sync_joint(int ji) {
+        bool all_synced_before = joint_fully_synced(ji);
+        // 방금 수신된 모터를 sync 표시
+        for (int mi : joint_motors(ji)) {
+            if (motors[mi]->state.online && !motor_sync_[mi]) {
+                motor_sync_[mi] = true;
+                getLogger()->info("[{}] Motor[{}] synced pos={:.3f}", getName(), mi, motors[mi]->state.pos);
+            }
+        }
+        // 이 조인트의 모든 모터가 동기화 완료됐을 때 초기 명령을 현재 위치로 설정
+        if (!all_synced_before && joint_fully_synced(ji)) {
+            joint_fb_pos_[ji] = compute_joint_fk(ji);
+            joint_cmds[ji].pos = joint_fb_pos_[ji];
+            cmd_interp[ji] = {};
+            getLogger()->info("[{}] Joint{} synced at pos={:.4f}", getName(), ji + 2, joint_fb_pos_[ji]);
+        }
+    }
+
+    // 가상 조인트 상태 발행 (FK)
+    void publish_joint_states() {
+        for (int ji = 0; ji < NJ; ji++) {
+            if (!joint_fully_synced(ji)) continue;
+
+            joint_fb_pos_[ji] = compute_joint_fk(ji);
+
+            custom_types::MotorState st{};
+            st.pos     = joint_fb_pos_[ji];
+            st.vel     = compute_joint_vel_fk(ji);
+            st.torque  = compute_joint_torque_fk(ji);
+            st.status  = 0;
+            st.enabled = joint_on[ji];
+            dw_joint_state[ji].write(st);
+        }
+    }
+
+    // IK → 물리 모터 명령 송신
+    void send_motor_commands(uint64_t tick, int /*offline*/) {
+        for (int ji = 0; ji < NJ; ji++) {
+            const bool ready = joint_on[ji] && joint_fully_synced(ji) &&
+                               (tick - cmd_wdt[ji] <= 1 * getFrequency());
+
+            if (!ready) {
+                // 오프라인 or 준비 안 됨 → 영 명령
+                for (int mi : joint_motors(ji))
+                    motors[mi]->Control(so, MotorCommand{});
+                continue;
             }
 
-            getLogger()->warn("[{}] {} does not accept 'restart', falling back to socket reopen only", getName(), port);
+            // IK: 가상 조인트 명령 → 물리 모터 명령
+            apply_ik_and_send(ji);
+
+            // applied cmd 발행 (가상 조인트 공간)
+            custom_types::MotorCmd applied{};
+            applied.pos    = joint_cmds[ji].pos;
+            applied.vel    = joint_cmds[ji].vel;
+            applied.torque = joint_cmds[ji].torque;
+            applied.kp     = joint_cmds[ji].kp;
+            applied.kd     = joint_cmds[ji].kd;
+            dw_joint_cmd_applied[ji].write(applied);
+        }
+    }
+
+    void apply_ik_and_send(int ji) {
+        const auto& cmd = joint_cmds[ji];
+        switch (ji) {
+            case 0: { // joint2: 볼스크류 1:1 IK
+                MotorCommand mc{};
+                mc.pos    = kin_manip::joint2_joint_to_motor(cmd.pos);
+                mc.vel    = kin_manip::joint2_vel_joint_to_motor(cmd.vel);
+                mc.torque = kin_manip::joint2_force_joint_to_motor(cmd.torque);
+                mc.kp = cmd.kp;
+                mc.kd = cmd.kd;
+                motors[0]->Control(so, mc);
+                break;
+            }
+            case 1: { // joint3: 팔꿈치 와이어 2모터 IK
+                auto [pa, pb] = kin_manip::joint3_joint_to_motors(cmd.pos);
+                auto [va, vb] = kin_manip::joint3_vel_joint_to_motors(cmd.vel);
+                auto [ta, tb] = kin_manip::joint3_torque_joint_to_motors(cmd.torque);
+                MotorCommand mca{}, mcb{};
+                mca.pos = pa; mca.vel = va; mca.torque = ta; mca.kp = cmd.kp; mca.kd = cmd.kd;
+                mcb.pos = pb; mcb.vel = vb; mcb.torque = tb; mcb.kp = cmd.kp; mcb.kd = cmd.kd;
+                motors[1]->Control(so, mca);
+                motors[2]->Control(so, mcb);
+                break;
+            }
+            case 2: { // joint4: 상단링크 와이어 2모터 IK
+                auto [pa, pb] = kin_manip::joint4_joint_to_motors(cmd.pos);
+                auto [va, vb] = kin_manip::joint4_vel_joint_to_motors(cmd.vel);
+                auto [fa, fb] = kin_manip::joint4_force_joint_to_motors(cmd.torque);
+                MotorCommand mca{}, mcb{};
+                mca.pos = pa; mca.vel = va; mca.torque = fa; mca.kp = cmd.kp; mca.kd = cmd.kd;
+                mcb.pos = pb; mcb.vel = vb; mcb.torque = fb; mcb.kp = cmd.kp; mcb.kd = cmd.kd;
+                motors[3]->Control(so, mca);
+                motors[4]->Control(so, mcb);
+                break;
+            }
+        }
+    }
+
+    // ── 데이터 채널 ──
+    DataWriter<bool> dw_state{"can1_state", ArchiveOption::Enable};
+
+    DataWriter<custom_types::MotorState> dw_joint_state[NJ] = {
+        DataWriter<custom_types::MotorState>{"joint2/state", ArchiveOption::Enable},
+        DataWriter<custom_types::MotorState>{"joint3/state", ArchiveOption::Enable},
+        DataWriter<custom_types::MotorState>{"joint4/state", ArchiveOption::Enable},
+    };
+    DataWriter<custom_types::MotorCmd> dw_joint_cmd_applied[NJ] = {
+        DataWriter<custom_types::MotorCmd>{"joint2/cmd_applied", ArchiveOption::Enable},
+        DataWriter<custom_types::MotorCmd>{"joint3/cmd_applied", ArchiveOption::Enable},
+        DataWriter<custom_types::MotorCmd>{"joint4/cmd_applied", ArchiveOption::Enable},
+    };
+    DataReader<custom_types::MotorCmd> dr_joint_cmd[NJ] = {
+        DataReader<custom_types::MotorCmd>{"joint2/cmd"},
+        DataReader<custom_types::MotorCmd>{"joint3/cmd"},
+        DataReader<custom_types::MotorCmd>{"joint4/cmd"},
+    };
+    DataReader<bool> dr_joint_on[NJ] = {
+        DataReader<bool>{"joint2/on"},
+        DataReader<bool>{"joint3/on"},
+        DataReader<bool>{"joint4/on"},
+    };
+
+    Parameter<std::string> p_port{"can1.port", "can1"};
+
+    // ── 모터 ──
+    std::vector<std::shared_ptr<Motor>> motors = {
+        std::make_shared<MyActuatorX6>(0x03), // joint2: 볼스크류
+        std::make_shared<MyActuatorX6>(0x04), // joint3: 와이어 A
+        std::make_shared<MyActuatorX6>(0x05), // joint3: 와이어 B
+        std::make_shared<MyActuatorX6>(0x06), // joint4: 와이어 A
+        std::make_shared<MyActuatorX6>(0x07), // joint4: 와이어 B
+    };
+
+    // ── 내부 상태 ──
+    struct MotorCmdInterp {
+        bool   active      = false;
+        double start_ref   = 0.0;
+        double target_pos  = 0.0;
+        double duration_ms = 0.0;
+        double elapsed_ms  = 0.0;
+    };
+
+    std::array<MotorCmdInterp, NJ> cmd_interp{};
+    std::array<MotorCommand, NJ>   joint_cmds{};
+    std::array<double, NJ>         joint_fb_pos_{};
+    bool   joint_on[NJ]    = {};
+    bool   motor_sync_[NM] = {};
+    int    cmd_wdt[NJ]     = {};
+    int    com_wdt[NM]     = {};
+    int    can_wdt         = 0;
+    int    so              = -1;
+    bool   link_initialized = false;
+    bool   restart_required = false;
+
+    // ── CAN 유틸리티 (can_bus0.h와 동일 구조) ──
+    bool run_ip_command(const char* port, const char* action, bool log_fail = true) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "ip link set dev %s %s", port, action);
+        int ret = system(cmd);
+        if (ret == -1 || !WIFEXITED(ret) || WEXITSTATUS(ret) != 0) {
+            if (log_fail) getLogger()->error("[{}] '{}' failed", getName(), cmd);
             return false;
         }
+        return true;
+    }
 
-        int can_open(char* port) {
-            if (!link_initialized) {
-                if (is_link_up(port)) {
-                    link_initialized = true;
-                    getLogger()->info("[{}] {} is already up. Skipping CAN reconfiguration.", getName(), port);
-                } else {
-                    if (!can_ifup(port)) return -1;
-                    link_initialized = true;
-                }
-            } else if (restart_required) {
-                can_restart(port);
+    bool is_link_up(const char* port) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) return false;
+        struct ifreq ifr{};
+        strncpy(ifr.ifr_name, port, IFNAMSIZ - 1);
+        bool up = (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0) && (ifr.ifr_flags & IFF_UP);
+        close(fd);
+        return up;
+    }
+
+    void reset_can_state() {
+        can_wdt = 0;
+        for (auto& t : cmd_wdt)    t = 0;
+        for (auto& t : com_wdt)    t = 0;
+        for (auto& m : motors)     m->state.online = false;
+        for (auto& s : motor_sync_) s = false;
+        for (auto& i : cmd_interp)  i = {};
+    }
+
+    bool can_ifup(const char* port) {
+        reset_can_state();
+        const char* attempts[] = {
+            "up type can bitrate 1000000 restart-ms 100 berr-reporting on",
+            "up type can bitrate 1000000 restart-ms 100",
+            "up type can bitrate 1000000"
+        };
+        for (auto* a : attempts) {
+            if (run_ip_command(port, a, false)) {
+                getLogger()->info("[{}] {} up: '{}'", getName(), port, a);
+                return true;
             }
+        }
+        getLogger()->error("[{}] Failed to configure {}", getName(), port);
+        return false;
+    }
 
-            int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-
-            if (s <= 0) {
-                getLogger()->error("[{}] Failed to open CAN interface on {}", getName(), port);
-                return s;
+    int can_open(char* port) {
+        if (!link_initialized) {
+            if (is_link_up(port)) {
+                link_initialized = true;
+                getLogger()->info("[{}] {} already up", getName(), port);
+            } else {
+                if (!can_ifup(port)) return -1;
+                link_initialized = true;
             }
-
-            // 에러 프레임 수신 활성화 (bus-off, 버스 에러 감지용)
-            can_err_mask_t err_mask = CAN_ERR_TX_TIMEOUT | CAN_ERR_BUSOFF | CAN_ERR_BUSERROR | CAN_ERR_RESTARTED;
-            setsockopt(s, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &err_mask, sizeof(err_mask));
-
-            struct ifreq ifr; strcpy(ifr.ifr_name, port);
-            if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
-                getLogger()->error("[{}] Failed to resolve CAN interface {}: {}", getName(), port, strerror(errno));
-                close(s);
-                return -1;
-            }
-            struct sockaddr_can addr = {0};
-            addr.can_family = AF_CAN; addr.can_ifindex = ifr.ifr_ifindex;
-            if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-                getLogger()->error("[{}] Failed to bind CAN interface {}: {}", getName(), port, strerror(errno));
-                close(s);
-                return -1;
-            }
-
-            // 수신 Non-blocking 설정
-            int flags = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, flags | O_NONBLOCK);
-
-            restart_required = false;
-            getLogger()->info("[{}] CanBus connection established on {}", getName(), port);
-            return s;
+        } else if (restart_required) {
+            run_ip_command(port, "restart", false);
         }
 
-        void can_close() {
-            if (so > 0) {
-                close(so);
-                getLogger()->info("[{}] CanBus connection closed", getName());
-            }
-            so = -1;
-            reset_can_state();
-        }
+        int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+        if (s <= 0) { getLogger()->error("[{}] socket() failed on {}", getName(), port); return s; }
 
-        
+        can_err_mask_t em = CAN_ERR_TX_TIMEOUT | CAN_ERR_BUSOFF | CAN_ERR_BUSERROR | CAN_ERR_RESTARTED;
+        setsockopt(s, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &em, sizeof(em));
 
-    private:
-        // 모터단 interpolation 상태 (상위에서 target+duration을 받으면 현재 ref 기준으로 보간)
-        struct MotorCmdInterp {
-            bool active = false;
-            double start_ref = 0.0;    // interpolation 시작 시점의 ref position
-            double target_pos = 0.0;   // 목표 position (변경 감지용)
-            double duration_ms = 0.0;
-            double elapsed_ms = 0.0;
-        };
-        std::array<MotorCmdInterp, 6> cmd_interp{};
+        struct ifreq ifr; strcpy(ifr.ifr_name, port);
+        if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) { close(s); return -1; }
 
-        int so=-1;
-        int cmd_wdt[6] = {0,};
-        int com_wdt[6] = {0,};
-        int can_wdt = 0;
-        bool on_flag[6] = {false,};
-        bool motor_sync_[6] = {false,}; // 피드백 기반 동기화 완료 여부
-        bool link_initialized = false;
-        bool restart_required = false;
-        std::array<double, 6> joint_feedback_pos_{};
+        struct sockaddr_can addr{};
+        addr.can_family = AF_CAN; addr.can_ifindex = ifr.ifr_ifindex;
+        if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(s); return -1; }
 
-        std::array<MotorCommand, 6> cmds;
-        std::vector<std::shared_ptr<Motor>> motors = {
-            std::make_shared<RmdX6P36>(0x11), // hip_yaw_right
-            std::make_shared<RmdX6P36>(0x12), // hip_roll_right
-            std::make_shared<RmdX6P36>(0x13), // hip_pitch_right
-            std::make_shared<RmdX6P36>(0x14), // knee_right
-            std::make_shared<RobStride03>(0x15), // ankle_upper_right
-            std::make_shared<RobStride03>(0x16), // ankle_lower_right
-        };
+        int flags = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, flags | O_NONBLOCK);
+        restart_required = false;
+        getLogger()->info("[{}] Connected on {}", getName(), port);
+        return s;
+    }
 
-    };
+    void can_close() {
+        if (so > 0) { close(so); getLogger()->info("[{}] CAN closed", getName()); }
+        so = -1;
+        reset_can_state();
+    }
 };
+
+} // namespace task_pool

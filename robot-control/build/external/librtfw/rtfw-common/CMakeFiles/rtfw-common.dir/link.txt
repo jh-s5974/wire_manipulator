@@ -1,0 +1,2 @@
+/usr/bin/ar qc librtfw-common.a CMakeFiles/rtfw-common.dir/src/FileBlackbox.cpp.o
+/usr/bin/ranlib librtfw-common.a

@@ -208,6 +208,69 @@ public:
 };
 
 // ==========================================================
+// [MyActuator X6 구현체 (MIT cheetah protocol)]
+// X6-8: 8:1 reduction, ±18 Nm peak, ±30 rad/s (output)
+// CAN: TX 0x400+id (standard frame), RX 0x500+id (standard frame)
+// ==========================================================
+class MyActuatorX6 : public Motor {
+public:
+    MyActuatorX6(uint32_t _id) { id = _id; }
+
+    bool packStart(struct can_frame* frame) override {
+        // MyActuator X6 MIT protocol: send zero-torque command to activate
+        return packControl(frame, MotorCommand{});
+    }
+
+    bool packControl(struct can_frame* frame, const MotorCommand& cmd) override {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x400 + id;
+        frame->can_dlc = 8;
+
+        uint16_t p_des = float_to_uint(cmd.pos,    -12.5f, 12.5f, 16);
+        uint16_t v_des = float_to_uint(cmd.vel,    -30.0f, 30.0f, 12);
+        uint16_t kp    = float_to_uint(cmd.kp,       0.0f, 500.0f, 12);
+        uint16_t kd    = float_to_uint(cmd.kd,       0.0f,   5.0f, 12);
+        uint16_t t_ff  = float_to_uint(cmd.torque, -18.0f,  18.0f, 12);
+
+        frame->data[0] = p_des >> 8;
+        frame->data[1] = p_des & 0xFF;
+        frame->data[2] = v_des >> 4;
+        frame->data[3] = ((v_des & 0xF) << 4) | (kp >> 8);
+        frame->data[4] = kp & 0xFF;
+        frame->data[5] = kd >> 4;
+        frame->data[6] = ((kd & 0xF) << 4) | (t_ff >> 8);
+        frame->data[7] = t_ff & 0xFF;
+        return true;
+    }
+
+    bool packStop(struct can_frame* frame) override {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+        frame->data[0] = 0x80; // shutdown
+        return true;
+    }
+
+    bool parseFeedback(const struct can_frame* frame) override {
+        if (frame->can_id != (0x500 + id)) return false;
+        uint16_t p_int = ((uint16_t)frame->data[1] << 8) | frame->data[2];
+        uint16_t v_int = ((uint16_t)frame->data[3] << 4) | (frame->data[4] >> 4);
+        uint16_t t_int = (((uint16_t)frame->data[4] & 0xF) << 8) | frame->data[5];
+
+        state.pos    = uint_to_float(p_int, -12.5f, 12.5f, 16);
+        state.vel    = uint_to_float(v_int, -30.0f, 30.0f, 12);
+        state.torque = uint_to_float(t_int, -18.0f, 18.0f, 12);
+        state.online = true;
+        return true;
+    }
+
+    bool isMyFrame(const struct can_frame* frame) override {
+        if (frame->can_id & CAN_EFF_FLAG) return false;
+        return frame->can_id == (0x500 + id);
+    }
+};
+
+// ==========================================================
 // [RmdMotor 구현체 (V3 매뉴얼 반영)]
 // ==========================================================
 class RmdX6P36 : public Motor {

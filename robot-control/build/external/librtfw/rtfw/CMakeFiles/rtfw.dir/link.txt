@@ -1,0 +1,2 @@
+/usr/bin/ar qc librtfw.a CMakeFiles/rtfw.dir/src/rt_framework.cpp.o CMakeFiles/rtfw.dir/src/task.cpp.o CMakeFiles/rtfw.dir/src/timeline.cpp.o CMakeFiles/rtfw.dir/src/shm_context.cpp.o CMakeFiles/rtfw.dir/src/shm_allocator.cpp.o CMakeFiles/rtfw.dir/src/parameter_manager.cpp.o
+/usr/bin/ranlib librtfw.a

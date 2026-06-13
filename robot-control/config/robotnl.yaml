@@ -1,204 +1,124 @@
-policy_checkpoint_path: policy/policy47_7.pt
-policy_stand_path: policy/policy_stand3.pt
-control_dt: 0.005
-policy_dt: 0.02
-physics_dt: 0.0005
-cutoff_freq: 200
-num_joints: 12
-num_actions: 12
-action_scale: 0.25
-action_limit_lower: -10000
-action_limit_upper: 10000
-num_observations: 47
-history_length: 0
+# Wire Manipulator 설정
+# ─────────────────────────────────────────────────────────────────────────────
+# 조인트 순서 (0~4):
+#   joint0: base_yaw   (revolute,  RobStride03 0x01, CAN0)
+#   joint1: pitch       (revolute,  RobStride03 0x02, CAN0)
+#   joint2: lower_link  (prismatic, MyActuatorX6 0x03, CAN1, ball screw)
+#   joint3: elbow_pitch (revolute,  MyActuatorX6 0x04+0x05, CAN1, wire)
+#   joint4: upper_link  (prismatic, MyActuatorX6 0x06+0x07, CAN1, wire)
+# ─────────────────────────────────────────────────────────────────────────────
+
 gui/control_password: 1234
 
-joints:
-- hip_yaw_left
-- hip_yaw_right
-- hip_roll_left
-- hip_roll_right
-- hip_pitch_left
-- hip_pitch_right
-- knee_left
-- knee_right
-- ankle_pitch_left
-- ankle_pitch_right
-- ankle_roll_left
-- ankle_roll_right
+# 명령 보간 시간 [s] — GUI에서 보내는 duration을 이 값으로 강제 적용
+# 0.0  : 즉시 이동 (끄떡거림 없음, 권장)
+# 음수 : yaml 무시하고 GUI 값 그대로 사용
+# 양수 : 해당 초만큼 보간 (중력 하중 큰 관절에서 끄떡거림 발생 주의)
+ws_bridge.default_duration_sec: -1.0
 
+# CAN 포트
+can0.port: can0
+can1.port: can1
+
+# ── MuJoCo 시뮬레이션 ──
+mujoco.model_path: mjcf/manipulator.xml
+control_dt: 0.005
+physics_dt: 0.001
+cutoff_freq: 200.0
+
+# 중력 보상 — true: qfrc_bias를 피드포워드로 자동 적용 (시뮬레이션용)
+# 실하드웨어에서는 별도 중력 모델 필요
+gravity_compensation: true
+
+# MJCF 조인트 이름 (index 0~4 가 joint0~joint4 에 대응)
+joints:
+- yaw1    # joint0: base_yaw
+- pitch1  # joint1: shoulder_pitch
+- pris1   # joint2: lower_link (prismatic)
+- pitch2  # joint3: elbow_pitch
+- pris2   # joint4: upper_link (prismatic)
+
+# PD 제어 게인 (joint0~4)
 joint_kp:
-# - 240.0
-# - 240.0
-# - 240.0
-# - 240.0
-# - 100.0
-# - 100.0
-# - 100.0
-# - 100.0
-# - 25.0
-# - 25.0
-# - 25.0
-# - 25.0
-- 240.0
-- 240.0
-- 240.0
-- 240.0
-- 50.0
-- 50.0
-- 20.0
-- 20.0
-- 10.0
-- 10.0
-- 10.0
-- 10.0
+- 100.0   # joint0: base_yaw
+- 100.0   # joint1: pitch
+- 200.0   # joint2: lower_link (ball screw)
+- 80.0    # joint3: elbow_pitch (wire)
+- 80.0    # joint4: upper_link (wire)
 
 joint_kd:
-# - 5.0
-# - 5.0
-# - 5.0
-# - 5.0
-# - 2.5
-# - 2.5
-# - 2.5
-# - 2.5
-# - 1.0
-# - 1.0
-# - 1.0
-# - 1.0
-- 5.0
-- 5.0
-- 5.0
-- 5.0
-- 1.8
-- 1.8
-- 1.1
-- 1.1
-- 1.0
-- 1.0
-- 1.0
-- 1.0
+- 3.0     # joint0: base_yaw
+- 3.0     # joint1: pitch
+- 4.0     # joint2: lower_link (ball screw)
+- 2.5     # joint3: elbow_pitch (wire)
+- 2.5     # joint4: upper_link (wire)
 
+# 액추에이터 포화 한계 [Nm / N] — 시뮬레이션에서 토크 클램프에 사용
 effort_limits:
-- 40.0
-- 40.0
-- 40.0
-- 40.0
-- 60.0
-- 60.0
-- 60.0
-- 60.0
-- 6.0
-- 6.0
-- 6.0
-- 6.0
+- 100.0   # joint0: base_yaw
+- 100.0   # joint1: pitch
+- 500.0   # joint2: lower_link (ball screw, 선형 힘 [N])
+- 100.0   # joint3: elbow_pitch (wire)
+- 500.0   # joint4: upper_link (wire, 선형 힘 [N])
 
+# 초기 위치 (joint0~4)
 default_joint_positions:
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- -0.2
-- -0.2
-- 0.4
-- 0.4
-- -0.3
-- -0.3
-- 0.0
-- 0.0
+- 0.0     # joint0: base_yaw [rad]
+- 0.0     # joint1: pitch [rad]
+- 0.0     # joint2: lower_link [m]
+- 0.0     # joint3: elbow_pitch [rad]
+- 0.0     # joint4: upper_link [m]
 
-joint_zero_positions:
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
+# ─────────────────────────────────────────────────────────────────────────────
+# 세이프티 레이어 파라미터
+# 조인트 위치 한계: URDF 기반 (joint0~4)
+# ─────────────────────────────────────────────────────────────────────────────
 
-joint_reset_positions:
-- 0.0
-- 0.0
-- -0.2
-- 0.4
-- -0.3
-- 0.0
-- 0.0
-- 0.0
-- -0.2
-- 0.4
-- -0.3
-- 0.0
-
-default_base_position:
-- 0.0
-- 0.0
-- 0.77
-
-action_indices:
-- 0
-- 1
-- 2
-- 3
-- 4
-- 5
-- 6
-- 7
-- 8
-- 9
-- 10
-- 11
-
-joint_states/names:
-- hip_yaw_left
-- hip_roll_left
-- hip_pitch_left
-- knee_left
-- ankle_pitch_left
-- ankle_roll_left
-- hip_yaw_right
-- hip_roll_right
-- hip_pitch_right
-- knee_right
-- ankle_pitch_right
-- ankle_roll_right
-
-can0.port: can1
-can1.port: can2
-
-# Joint position limits from MJCF (radians)
-# Order: hip_yaw_left, hip_yaw_right, hip_roll_left, hip_roll_right,
-#        hip_pitch_left, hip_pitch_right, knee_left, knee_right,
-#        ankle_pitch_left, ankle_pitch_right, ankle_roll_left, ankle_roll_right
+# 조인트 위치 하한 [rad / m]
 safety_layer.joint_pos_limit_lower:
-- -3 #-0.698132  # hip_yaw_left
-- -3 #-1.5708    # hip_yaw_right
-- -3 #-0.698132  # hip_roll_left
-- -3 #-1.5708    # hip_roll_right
-- -3 #-1.8326    # hip_pitch_left
-- -3 #-1.8326    # hip_pitch_right
-- -3 #-0.1        # knee_left
-- -3 #-0.1        # knee_right
-- -3 #-1.22173   # ankle_pitch_left
-- -3 #-1.22173   # ankle_pitch_right
-- -3 #-0.663225  # ankle_roll_left
-- -3 #-0.523599  # ankle_roll_right
+- -2.094395  # joint0: base_yaw   (±120 deg)
+- -0.523599  # joint1: pitch      (-30 deg)
+- -0.09      # joint2: lower_link (-90 mm)
+- -1.570796  # joint3: elbow_pitch (±90 deg)
+- -0.095     # joint4: upper_link  (-95 mm)
 
+# 조인트 위치 상한 [rad / m]
 safety_layer.joint_pos_limit_upper:
-- 3 #1.5708     # hip_yaw_left
-- 3 #0.698132   # hip_yaw_right
-- 3 #1.5708     # hip_roll_left
-- 3 #0.872665   # hip_roll_right
-- 3 #0.523599   # hip_pitch_left
-- 3 #0.523599   # hip_pitch_right
-- 3 #2.1293     # knee_left
-- 3 #2.1293     # knee_right
-- 3 #1.0472     # ankle_pitch_left
-- 3 #1.0472     # ankle_pitch_right
-- 3 #0.523599   # ankle_roll_left
-- 3 #0.663225   # ankle_roll_right
+- 2.094395   # joint0: base_yaw   (±120 deg)
+- 1.570796   # joint1: pitch      (+90 deg)
+- 0.0        # joint2: lower_link (0 mm)
+- 1.570796   # joint3: elbow_pitch (±90 deg)
+- 0.0        # joint4: upper_link  (0 mm)
+
+# 조인트 속도 한계 [rad/s 또는 m/s]
+safety_layer.joint_vel_limit: 30.0
+
+# 조인트 토크/힘 한계 [Nm 또는 N]
+safety_layer.joint_torque_limit: 30.0
+
+# 온도 한계 [°C]
+safety_layer.joint_temp_limit_c: 95.0
+
+# 위치 한계 허용 오차 [rad / m]
+# 시뮬: 0.002 (부동소수점 드리프트 흡수), 실하드웨어: 0.001
+safety_layer.pos_tolerance: 0.002
+
+# 명령 타임아웃 [s]
+safety_layer.cmd_timeout_sec: 1.0
+
+# 상태 타임아웃 [s]
+safety_layer.state_timeout_sec: 1.0
+
+# 명령 클램프 한계
+safety_layer.cmd_pos_limit: 10.0
+safety_layer.cmd_vel_limit: 30.0
+safety_layer.cmd_torque_limit: 30.0
+safety_layer.cmd_kp_limit: 600.0
+safety_layer.cmd_kd_limit: 5.0
+
+# LOCK 모드 홀드 게인
+safety_layer.lock_kp: 100.0
+safety_layer.lock_kd: 3.0
+
+# LOCK → MANUAL 복구 시간 [s]
+safety_layer.restore_duration_sec: 10.0

@@ -100,6 +100,15 @@ export function useRobotWs({
     sendRaw(msg);
   };
 
+  const sendDataLogger = (start: boolean) => {
+    const msg: BaseMessage<{ start: boolean }> = {
+      type: "data_logger",
+      timestamp: Date.now(),
+      payload: { start },
+    };
+    sendRaw(msg);
+  };
+
   const sendAuth = (socket: WebSocket, passwordText?: string) => {
     const candidate = (passwordText ?? passwordRef.current ?? "").trim();
     if (candidate.length === 0) {
@@ -321,6 +330,7 @@ export function useRobotWs({
     sendMotorControlRequest,
     sendRobotModeRequest,
     sendSafetyReset,
+    sendDataLogger,
     sendRaw,
     retryAuth,
     manualConnect,

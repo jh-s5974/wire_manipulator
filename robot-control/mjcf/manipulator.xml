@@ -1,0 +1,176 @@
+<?xml version="1.0" ?>
+<mujoco model="manipulator">
+    <!--
+        와이어 매니퓰레이터 MuJoCo 모델
+        URDF: manipulator_description/urdf/manipulator.urdf 기반
+
+        조인트 → SDK 채널 매핑 (config/robotnl.yaml joints 순서와 일치):
+          yaw1   → joint0  (base_yaw, revolute)
+          pitch1 → joint1  (shoulder_pitch, revolute)
+          pris1  → joint2  (lower_link_length, prismatic, ball screw)
+          pitch2 → joint3  (elbow_pitch, revolute, wire)
+          pris2  → joint4  (upper_link_length, prismatic, wire)
+
+        pitch3 : guide1_1 → upper_link1_1 passive 조인트
+                 equality 제약으로 pitch2와 결합 (와이어 커플링 근사)
+    -->
+
+    <!-- meshdir는 MJCF 파일 위치 기준 상대경로 -->
+    <compiler angle="radian"
+              meshdir="/home/jh/wire_manipulator/manipulator_description/meshes"
+              autolimits="true"/>
+
+    <option gravity="0 0 -9.81" timestep="0.001"/>
+
+    <default>
+        <!-- armature: 감속기 반사 관성 (PD 안정성). frictionloss: 쿨롱 마찰. damping: 점성 감쇠 (1ms마다 적용 → 5ms 외부 kd보다 훨씬 효과적) -->
+        <joint frictionloss="0.1" armature="0.05" damping="1.0"/>
+        <default class="revolute">
+            <joint damping="2.0" armature="0.05"/>
+        </default>
+        <default class="prismatic">
+            <!-- 선형 조인트: 더 큰 점성 감쇠 필요 -->
+            <joint damping="10.0" armature="0.01"/>
+        </default>
+        <default class="visual">
+            <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.75 0.75 0.75 1"/>
+        </default>
+        <default class="collision">
+            <geom group="3" contype="1" conaffinity="1"/>
+        </default>
+    </default>
+
+    <asset>
+        <!-- 매니퓰레이터 메시 (scale: mm → m) -->
+        <mesh name="base_link"     file="base_link.stl"     scale="0.001 0.001 0.001"/>
+        <mesh name="yaw_link_1"    file="yaw_link_1.stl"    scale="0.001 0.001 0.001"/>
+        <mesh name="lower_link1_1" file="lower_link1_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="lower_link2_1" file="lower_link2_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="guide1_1"      file="guide1_1.stl"      scale="0.001 0.001 0.001"/>
+        <mesh name="upper_link1_1" file="upper_link1_1.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="upper_link2_1" file="upper_link2_1.stl" scale="0.001 0.001 0.001"/>
+
+        <!-- 바닥 / 하늘 -->
+        <texture type="skybox" builtin="gradient"
+                 rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+        <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+                 rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+                 markrgb="0.8 0.8 0.8" width="300" height="300"/>
+        <material name="groundplane" texture="groundplane"
+                  texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    </asset>
+
+    <worldbody>
+        <light pos="0 0 3" dir="0 0 -1" directional="true"/>
+        <geom name="floor" size="0 0 0.05" type="plane"
+              material="groundplane" friction="1.0 0.005 0.0001"/>
+
+        <!-- ═══════════════════════════════════════════════════
+             base_link: 세계에 고정 (freejoint 없음)
+             ═══════════════════════════════════════════════════ -->
+        <body name="base_link" pos="0 0 0.3" quat="1 0 0 0">
+            <geom type="mesh" mesh="base_link" class="visual"/>
+            <inertial pos="-1.596e-07 -0.028737 -0.021212"
+                      mass="1.156174"
+                      fullinertia="0.014916 0.008076 0.022252 0.0 -0.000245 0.0"/>
+
+            <!-- ── joint0: yaw1 (revolute, axis 0 0 -1) ── -->
+            <body name="yaw_link_1" pos="0 0 0">
+                <joint name="yaw1" type="hinge" pos="0 0 0"
+                       axis="0 0 -1" range="-2.094395 2.094395" class="revolute"/>
+                <geom type="mesh" mesh="yaw_link_1" class="visual" pos="0 0 0"/>
+                <inertial pos="-0.012333 -0.002898 0.070346"
+                          mass="1.666469"
+                          fullinertia="0.009588 0.010212 0.009638 -4e-06 -0.000256 -0.001462"/>
+
+                <!-- ── joint1: pitch1 (revolute, axis 1 0 0) ── -->
+                <!--    URDF joint origin: 0.005 0 0.195459 rel to yaw_link_1 -->
+                <body name="lower_link1_1" pos="0.005 0 0.195459">
+                    <!-- pitch1: 팔 전체 하중 지지, damping 더 크게 -->
+                    <joint name="pitch1" type="hinge" pos="0 0 0"
+                           axis="1 0 0" range="-0.523599 1.570796" class="revolute" damping="5.0"/>
+                    <!-- visual origin 보정: URDF visual xyz="-0.005 0 -0.195459" -->
+                    <geom type="mesh" mesh="lower_link1_1" class="visual" pos="-0.005 0 -0.195459"/>
+                    <inertial pos="-0.039559 -0.007914 7.38e-15"
+                              mass="0.394698"
+                              fullinertia="0.00253 0.000279 0.002554 -1e-06 0.0 0.0"/>
+
+                    <!-- ── joint2: pris1 (prismatic, axis 0 -1 0) ── -->
+                    <!--    URDF joint origin: 0.25 0.1348 -0.000772 rel to lower_link1_1 -->
+                    <body name="lower_link2_1" pos="0.25 0.1348 -0.000772">
+                        <joint name="pris1" type="slide" pos="0 0 0"
+                               axis="0 -1 0" range="-0.09 0.0" class="prismatic"/>
+                        <!-- visual origin: -0.255 -0.1348 -0.194687 -->
+                        <geom type="mesh" mesh="lower_link2_1" class="visual"
+                              pos="-0.255 -0.1348 -0.194687"/>
+                        <inertial pos="-0.288821 0.025037 0.000773"
+                                  mass="0.483734"
+                                  fullinertia="0.002597 0.000395 0.002445 -3e-06 0.0 0.0"/>
+
+                        <!-- ── joint3: pitch2 (revolute, axis -1 0 0) ── -->
+                        <!--    URDF joint origin: -0.32765 0.07 0.000772 rel to lower_link2_1 -->
+                        <body name="guide1_1" pos="-0.32765 0.07 0.000772">
+                            <joint name="pitch2" type="hinge" pos="0 0 0"
+                                   axis="-1 0 0" range="-1.570796 1.570796" class="revolute"/>
+                            <!-- visual origin: 0.07265 -0.2048 -0.195459 -->
+                            <geom type="mesh" mesh="guide1_1" class="visual"
+                                  pos="0.07265 -0.2048 -0.195459"/>
+                            <inertial pos="-0.005042 0.046750 -8.13e-15"
+                                      mass="0.030529"
+                                      fullinertia="3.5e-05 2e-06 3.3e-05 0.0 0.0 0.0"/>
+
+                            <!-- pitch3: passive (guide1_1 → upper_link1_1)
+                                 equality 제약으로 pitch2 값을 따름 (와이어 커플링 근사)
+                                 URDF joint origin: 0 0.0935 0 rel to guide1_1 -->
+                            <body name="upper_link1_1" pos="0 0.0935 0">
+                                <joint name="pitch3" type="hinge" pos="0 0 0"
+                                       axis="1 0 0" range="-1.570796 1.570796" class="revolute"/>
+                                <!-- visual origin: 0.07265 -0.2983 -0.195459 -->
+                                <geom type="mesh" mesh="upper_link1_1" class="visual"
+                                      pos="0.07265 -0.2983 -0.195459"/>
+                                <inertial pos="0.048813 0.090228 -1.24e-07"
+                                          mass="0.729637"
+                                          fullinertia="0.00632 0.000624 0.006514 -0.000515 0.0 0.0"/>
+
+                                <!-- ── joint4: pris2 (prismatic, axis 0 -1 0) ── -->
+                                <!--    URDF joint origin: 0.36515 0.177821 -0.000772 rel to upper_link1_1 -->
+                                <body name="upper_link2_1" pos="0.36515 0.177821 -0.000772">
+                                    <joint name="pris2" type="slide" pos="0 0 0"
+                                           axis="0 -1 0" range="-0.095 0.0" class="prismatic"/>
+                                    <!-- visual origin: -0.2925 -0.476121 -0.194687 -->
+                                    <geom type="mesh" mesh="upper_link2_1" class="visual"
+                                          pos="-0.2925 -0.476121 -0.194687"/>
+                                    <inertial pos="-0.301198 0.051859 0.001114"
+                                              mass="0.354799"
+                                              fullinertia="0.001653 0.000368 0.001635 2.8e-05 -8e-06 0.0"/>
+                                </body>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <!-- 와이어 커플링: pitch3 ≈ pitch2 (근사, 실제 기구학에 맞게 조정 필요) -->
+    <equality>
+        <joint joint1="pitch3" joint2="pitch2" polycoef="0 1 0 0 0"/>
+    </equality>
+
+    <!-- 5개 제어 액추에이터 (pitch3는 equality로 간접 제어) -->
+    <actuator>
+        <motor name="act_yaw1"   joint="yaw1"   forcerange="-100 100" gear="1"/>
+        <motor name="act_pitch1" joint="pitch1" forcerange="-100 100" gear="1"/>
+        <motor name="act_pris1"  joint="pris1"  forcerange="-500 500" gear="1"/>
+        <motor name="act_pitch2" joint="pitch2" forcerange="-100 100" gear="1"/>
+        <motor name="act_pris2"  joint="pris2"  forcerange="-500 500" gear="1"/>
+    </actuator>
+
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+        <rgba haze="0.15 0.25 0.35 1"/>
+        <global azimuth="120" elevation="-20"/>
+    </visual>
+
+    <statistic center="0 0.1 0.3" extent="1.2"/>
+</mujoco>

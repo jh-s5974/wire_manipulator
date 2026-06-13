@@ -51,4 +51,11 @@ namespace custom_types {
         std::array<double, kMaxJointCount> positions{};
     };
 
+    // 데이터 로거 상태 (DataLogger → WsBridgeTask)
+    struct LoggerInfo {
+        bool recording    = false;
+        int  sample_count = 0;
+        char filename[256] = {};
+    };
+
 }

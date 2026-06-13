@@ -61,6 +61,12 @@ export interface SafetyState {
   restoring?: boolean;
 }
 
+export interface DataLoggerState {
+  recording: boolean;
+  sample_count: number;
+  filename: string;
+}
+
 export interface StatePayload {
   control?: {
     requested: boolean;
@@ -68,6 +74,7 @@ export interface StatePayload {
   };
   robot_mode?: RobotModeState;
   safety?: SafetyState;
+  data_logger?: DataLoggerState;
   motors: MotorState[];
   imu: ImuState;
   // 로봇에서 직접 보내는 조인트 상태 (URDF 조인트명: 라디안)

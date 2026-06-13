@@ -1,14 +1,21 @@
 #pragma once
 
+// WsBridgeTask — 매니퓰레이터용
+//
+// GUI 화면 구성:
+//   1. 비밀번호 입력 (auth_required → auth_ok)
+//   2. 조인트 상태 표시 (joint0~4 위치/속도/토크)
+//   3. 모터 on/off 및 위치 명령 (MANU 상태에서 control_granted 후 사용)
+//   4. IDLE/MANU 모드 전환만 허용 (READY, RL WALK 제거)
+//   5. 세이프티 LOCK 해제 버튼
+
 #include "ws_bridge.hpp"
 #include "custom_types.hpp"
 #include <rtfw/task.h>
 
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
-#include <sstream>
 #include <string>
 
 using namespace std::chrono_literals;
@@ -19,420 +26,283 @@ namespace task_pool {
 
 class WsBridgeTask : public ITask {
 public:
-    WsBridgeTask() {
-        motor_power_on_.fill(false);
-    }
+    WsBridgeTask() { motor_power_on_.fill(false); }
 
     const char* getName() const override { return "WsBridgeTask"; }
 
-    void initialize(void* /*state_ptr*/) override {
+    void initialize(void*) override {
         bridge_.set_password(p_password.read());
         bridge_.start();
     }
 
-    void execute(void* /*state_ptr*/) override {
+    void execute(void*) override {
         update_inputs();
         bridge_.publish_state(build_snapshot());
 
         wsbridge::Event ev;
-        while (bridge_.try_pop_event(ev)) {
+        while (bridge_.try_pop_event(ev))
             handle_event(ev);
-        }
     }
 
 private:
-    static constexpr int kMotorCount = 16;
+    // ── 조인트 수 ──
+    static constexpr int kJointCount = 5;
 
-    struct MotorIo {
+    struct JointIo {
         const char* name;
         DataReader<custom_types::MotorState> state;
-        DataReader<custom_types::MotorCmd> safety_cmd;
-        DataReader<custom_types::MotorCmd> applied_cmd;
-        DataWriter<custom_types::MotorCmd> cmd;
-        DataWriter<bool> on;
+        DataReader<custom_types::MotorCmd>   safety_cmd;
+        DataReader<custom_types::MotorCmd>   applied_cmd;
+        DataWriter<custom_types::MotorCmd>   cmd;
+        DataWriter<bool>                     on;
     };
 
-    std::array<MotorIo, kMotorCount> motors_ = {{
-        {"hip_yaw_left", DataReader<custom_types::MotorState>{"hip_yaw_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_left/cmd"}, DataWriter<bool>{"gui/hip_yaw_left/on"}},
-        {"hip_yaw_right", DataReader<custom_types::MotorState>{"hip_yaw_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_yaw_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_yaw_right/cmd"}, DataWriter<bool>{"gui/hip_yaw_right/on"}},
-        {"hip_roll_left", DataReader<custom_types::MotorState>{"hip_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_left/cmd"}, DataWriter<bool>{"gui/hip_roll_left/on"}},
-        {"hip_roll_right", DataReader<custom_types::MotorState>{"hip_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_roll_right/cmd"}, DataWriter<bool>{"gui/hip_roll_right/on"}},
-        {"hip_pitch_left", DataReader<custom_types::MotorState>{"hip_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_left/cmd"}, DataWriter<bool>{"gui/hip_pitch_left/on"}},
-        {"hip_pitch_right", DataReader<custom_types::MotorState>{"hip_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"hip_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/hip_pitch_right/cmd"}, DataWriter<bool>{"gui/hip_pitch_right/on"}},
-        {"knee_left", DataReader<custom_types::MotorState>{"knee_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_left/cmd"}, DataWriter<bool>{"gui/knee_left/on"}},
-        {"knee_right", DataReader<custom_types::MotorState>{"knee_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"knee_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/knee_right/cmd"}, DataWriter<bool>{"gui/knee_right/on"}},
-        {"ankle_pitch_left", DataReader<custom_types::MotorState>{"ankle_pitch_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_left/cmd"}, DataWriter<bool>{"gui/ankle_pitch_left/on"}},
-        {"ankle_pitch_right", DataReader<custom_types::MotorState>{"ankle_pitch_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_pitch_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_pitch_right/cmd"}, DataWriter<bool>{"gui/ankle_pitch_right/on"}},
-        {"ankle_roll_left", DataReader<custom_types::MotorState>{"ankle_roll_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_left/cmd"}, DataWriter<bool>{"gui/ankle_roll_left/on"}},
-        {"ankle_roll_right", DataReader<custom_types::MotorState>{"ankle_roll_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_roll_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_roll_right/cmd"}, DataWriter<bool>{"gui/ankle_roll_right/on"}},
-        {"ankle_upper_left", DataReader<custom_types::MotorState>{"ankle_upper_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_upper_left/cmd"}, DataWriter<bool>{"gui/ankle_upper_left/on"}},
-        {"ankle_upper_right", DataReader<custom_types::MotorState>{"ankle_upper_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_upper_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_upper_right/cmd"}, DataWriter<bool>{"gui/ankle_upper_right/on"}},
-        {"ankle_lower_left", DataReader<custom_types::MotorState>{"ankle_lower_left/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_left/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_lower_left/cmd"}, DataWriter<bool>{"gui/ankle_lower_left/on"}},
-        {"ankle_lower_right", DataReader<custom_types::MotorState>{"ankle_lower_right/state", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd", DependencyType::Weak}, DataReader<custom_types::MotorCmd>{"ankle_lower_right/cmd_applied", DependencyType::Weak}, DataWriter<custom_types::MotorCmd>{"gui/ankle_lower_right/cmd"}, DataWriter<bool>{"gui/ankle_lower_right/on"}}
+    std::array<JointIo, kJointCount> joints_ = {{
+        {"joint0",
+         DataReader<custom_types::MotorState>{"joint0/state",       DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint0/cmd",         DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint0/cmd_applied", DependencyType::Weak},
+         DataWriter<custom_types::MotorCmd>  {"gui/joint0/cmd"},
+         DataWriter<bool>                    {"gui/joint0/on"}},
+        {"joint1",
+         DataReader<custom_types::MotorState>{"joint1/state",       DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint1/cmd",         DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint1/cmd_applied", DependencyType::Weak},
+         DataWriter<custom_types::MotorCmd>  {"gui/joint1/cmd"},
+         DataWriter<bool>                    {"gui/joint1/on"}},
+        {"joint2",
+         DataReader<custom_types::MotorState>{"joint2/state",       DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint2/cmd",         DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint2/cmd_applied", DependencyType::Weak},
+         DataWriter<custom_types::MotorCmd>  {"gui/joint2/cmd"},
+         DataWriter<bool>                    {"gui/joint2/on"}},
+        {"joint3",
+         DataReader<custom_types::MotorState>{"joint3/state",       DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint3/cmd",         DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint3/cmd_applied", DependencyType::Weak},
+         DataWriter<custom_types::MotorCmd>  {"gui/joint3/cmd"},
+         DataWriter<bool>                    {"gui/joint3/on"}},
+        {"joint4",
+         DataReader<custom_types::MotorState>{"joint4/state",       DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint4/cmd",         DependencyType::Weak},
+         DataReader<custom_types::MotorCmd>  {"joint4/cmd_applied", DependencyType::Weak},
+         DataWriter<custom_types::MotorCmd>  {"gui/joint4/cmd"},
+         DataWriter<bool>                    {"gui/joint4/on"}},
     }};
 
-    DataReader<custom_types::Imu> dr_imu_{"imu_data", DependencyType::Weak};
-    DataReader<bool> dr_motor_on_actual_[kMotorCount] = {
-        DataReader<bool>{"hip_yaw_left/on", DependencyType::Weak},
-        DataReader<bool>{"hip_yaw_right/on", DependencyType::Weak},
-        DataReader<bool>{"hip_roll_left/on", DependencyType::Weak},
-        DataReader<bool>{"hip_roll_right/on", DependencyType::Weak},
-        DataReader<bool>{"hip_pitch_left/on", DependencyType::Weak},
-        DataReader<bool>{"hip_pitch_right/on", DependencyType::Weak},
-        DataReader<bool>{"knee_left/on", DependencyType::Weak},
-        DataReader<bool>{"knee_right/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_pitch_left/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_pitch_right/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_roll_left/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_roll_right/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_pitch_left/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_pitch_right/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_roll_left/on", DependencyType::Weak},
-        DataReader<bool>{"ankle_roll_right/on", DependencyType::Weak},
-    };
-    DataReader<bool> dr_motor_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
-    DataReader<bool> dr_motor_control_granted_{"gui/motor/control_granted", DependencyType::Weak};
-    DataReader<int> dr_robot_mode_current_{"gui/robot/mode_current", DependencyType::Weak};
-    DataReader<int> dr_safety_level_{"manager/safety_level", DependencyType::Weak};
-    DataReader<bool> dr_safety_lock_{"safety/lock_state", DependencyType::Weak};
-    DataReader<bool> dr_safety_restore_{"safety/restore_state", DependencyType::Weak};
-    DataReader<bool> dr_walk_ready_{"manager/walk_ready", DependencyType::Weak};
-    DataWriter<bool> dw_motor_control_request_{"gui/motor/control_request"};
-    DataWriter<int> dw_robot_mode_request_{"gui/robot/mode_request"};
-    DataWriter<rt::Signal> dw_safety_reset_{"manager/reset_signal"};
+    // 공통 GUI 상태 채널
+    DataReader<bool> dr_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
+    DataReader<bool> dr_control_granted_  {"gui/motor/control_granted",   DependencyType::Weak};
+    DataReader<int>  dr_robot_mode_       {"gui/robot/mode_current",      DependencyType::Weak};
+    DataReader<bool> dr_safety_lock_      {"safety/lock_state",           DependencyType::Weak};
+    DataReader<bool> dr_safety_restore_   {"safety/restore_state",        DependencyType::Weak};
+
+    // 데이터 로거 채널
+    DataReader<custom_types::LoggerInfo> dr_logger_info_{"data_logger/info", DependencyType::Weak};
+    DataWriter<bool>                     dw_record_cmd_  {"data_logger/record_cmd"};
+
+    DataWriter<bool>       dw_control_request_{"gui/motor/control_request"};
+    DataWriter<int>        dw_robot_mode_req_  {"gui/robot/mode_request"};
+    DataWriter<rt::Signal> dw_safety_reset_    {"manager/reset_signal"};
+
     Parameter<std::string> p_password{"gui/control_password", ""};
-    Parameter<std::vector<std::string>> p_joint_names_{"joint_states/names"};
+    Parameter<double> p_default_duration_sec{"ws_bridge.default_duration_sec", 0.0};
+
     wsbridge::WebsocketBridge bridge_{8080};
 
-    std::array<custom_types::MotorState, kMotorCount> motor_cache_{};
-    std::array<custom_types::MotorCmd, kMotorCount> safety_cmd_cache_{};
-    std::array<bool, kMotorCount> safety_cmd_online_{};
-    std::array<custom_types::MotorCmd, kMotorCount> applied_cmd_cache_{};
-    std::array<bool, kMotorCount> applied_cmd_online_{};
-    std::array<bool, kMotorCount> motor_online_{};
-    std::array<bool, kMotorCount> motor_power_on_{};
-    std::array<bool, kMotorCount> motor_on_actual_{};
-    std::array<custom_types::MotorCmd, kMotorCount> cmd_cache_{};
+    // ── 캐시 ──
+    std::array<custom_types::MotorState, kJointCount> state_cache_{};
+    std::array<custom_types::MotorCmd,   kJointCount> safety_cmd_cache_{};
+    std::array<bool,                     kJointCount> safety_cmd_online_{};
+    std::array<custom_types::MotorCmd,   kJointCount> applied_cmd_cache_{};
+    std::array<bool,                     kJointCount> applied_cmd_online_{};
+    std::array<bool,                     kJointCount> joint_online_{};
+    std::array<bool,                     kJointCount> motor_power_on_{};
+    std::array<custom_types::MotorCmd,   kJointCount> cmd_cache_{};
 
-    static constexpr int kMaxJointCount = custom_types::kMaxJointCount;
-
-    custom_types::Imu imu_cache_{};
-    bool imu_online_ = false;
-    int joint_count_ = 0;
     bool control_requested_ = false;
-    bool control_granted_ = false;
-    int robot_mode_current_ = 0;
-    int safety_level_ = 0;
-    bool safety_locked_ = false;
-    bool safety_restoring_ = false;
-    bool walk_ready_ = false;
+    bool control_granted_   = false;
+    int  robot_mode_        = 0;
+    bool safety_locked_     = false;
+    bool safety_restoring_  = false;
 
-    static wsbridge::Vec3 quat_to_rpy(double w, double x, double y, double z) {
-        const double sinr_cosp = 2.0 * (w * x + y * z);
-        const double cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
-        const double roll = std::atan2(sinr_cosp, cosr_cosp);
+    custom_types::LoggerInfo logger_info_{};
 
-        const double sinp = 2.0 * (w * y - z * x);
-        const double pitch = std::abs(sinp) >= 1.0 ? std::copysign(M_PI / 2.0, sinp) : std::asin(sinp);
-
-        const double siny_cosp = 2.0 * (w * z + x * y);
-        const double cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
-        const double yaw = std::atan2(siny_cosp, cosy_cosp);
-
-        return {roll, pitch, yaw};
-    }
-
-    static std::string mode_from_status(int status) {
-        if (status == 0) return "IDLE";
-        return "POSITION";
-    }
-
-    static std::string robot_mode_to_string(int mode) {
-        switch (mode) {
-        case 0: return "IDLE";
-        case 1: return "MANU";
-        case 2: return "READY";
-        case 3: return "RL WALK";
-        default: return "IDLE";
-        }
-    }
-
-    static std::optional<int> robot_mode_from_string(const std::string& mode) {
-        if (mode == "IDLE") return 0;
-        if (mode == "MANU") return 1;
-        if (mode == "READY") return 2;
-        if (mode == "RL WALK") return 3;
-        return std::nullopt;
-    }
-
-    static std::string safety_level_to_string(int level) {
-        return level == 1 ? "STRICT" : "ESSENTIAL";
-    }
-
+    // ── 입력 갱신 ──
     void update_inputs() {
-        for (int index = 0; index < kMotorCount; ++index) {
-            motors_[index].state.on_update([&, index](const custom_types::MotorState& data) {
-                motor_cache_[index] = data;
-                motor_online_[index] = true;
+        for (int i = 0; i < kJointCount; i++) {
+            joints_[i].state.on_update([&, i](const custom_types::MotorState& d) {
+                state_cache_[i]  = d;
+                joint_online_[i] = true;
             });
-
-            motors_[index].safety_cmd.on_update([&, index](const custom_types::MotorCmd& data) {
-                safety_cmd_cache_[index] = data;
-                safety_cmd_online_[index] = true;
+            joints_[i].safety_cmd.on_update([&, i](const custom_types::MotorCmd& d) {
+                safety_cmd_cache_[i]  = d;
+                safety_cmd_online_[i] = true;
             });
-
-            motors_[index].applied_cmd.on_update([&, index](const custom_types::MotorCmd& data) {
-                applied_cmd_cache_[index] = data;
-                applied_cmd_online_[index] = true;
-            });
-
-            dr_motor_on_actual_[index].on_update([&, index](const bool& on) {
-                motor_on_actual_[index] = on;
+            joints_[i].applied_cmd.on_update([&, i](const custom_types::MotorCmd& d) {
+                applied_cmd_cache_[i]  = d;
+                applied_cmd_online_[i] = true;
             });
         }
-
-        dr_imu_.on_update([&](const custom_types::Imu& data) {
-            imu_cache_ = data;
-            imu_online_ = true;
-        });
-
-        dr_motor_control_requested_.on_update([&](const bool& requested) {
-            control_requested_ = requested;
-        });
-
-        dr_motor_control_granted_.on_update([&](const bool& granted) {
-            control_granted_ = granted;
-        });
-
-        dr_robot_mode_current_.on_update([&](const int& mode) {
-            robot_mode_current_ = mode;
-        });
-
-        dr_safety_level_.on_update([&](const int& level) {
-            safety_level_ = level;
-        });
-
-        dr_safety_lock_.on_update([&](const bool& locked) {
-            safety_locked_ = locked;
-        });
-
-        dr_safety_restore_.on_update([&](const bool& restoring) {
-            safety_restoring_ = restoring;
-        });
-
-        dr_walk_ready_.on_update([&](const bool& ready) {
-            walk_ready_ = ready;
-        });
+        dr_control_requested_.on_update([&](const bool& v) { control_requested_ = v; });
+        dr_control_granted_.on_update([&](const bool& v)   { control_granted_   = v; });
+        dr_robot_mode_.on_update([&](const int& v)          { robot_mode_        = v; });
+        dr_safety_lock_.on_update([&](const bool& v)        { safety_locked_     = v; });
+        dr_safety_restore_.on_update([&](const bool& v)     { safety_restoring_  = v; });
+        dr_logger_info_.on_update([&](const custom_types::LoggerInfo& v) { logger_info_ = v; });
     }
 
+    // ── 상태 스냅샷 생성 ──
     wsbridge::BridgeState build_snapshot() {
-        wsbridge::BridgeState state;
-        state.control.requested = control_requested_;
-        state.control.granted = control_granted_;
-        state.robot_mode.current = robot_mode_to_string(robot_mode_current_);
-        state.safety.level = safety_level_to_string(safety_level_);
-        state.safety.locked = safety_locked_;
-        state.safety.restoring = safety_restoring_;
-        state.robot_mode.walk_ready = walk_ready_;
-        state.motors.reserve(kMotorCount);
-        state.joint_states.reserve(12);
+        wsbridge::BridgeState st;
+        st.control.requested = control_requested_;
+        st.control.granted   = control_granted_;
+        st.robot_mode.current = robot_mode_to_string(robot_mode_);
+        st.safety.locked     = safety_locked_;
+        st.safety.restoring  = safety_restoring_;
+        st.safety.level      = "ESSENTIAL";
 
-        for (int index = 0; index < kMotorCount; ++index) {
-            const auto& in = motor_cache_[index];
-            wsbridge::MotorSnapshot out{};
-            out.id = index;
-            out.name = motors_[index].name;
-            out.mode = mode_from_status(in.status);
-            out.position = in.pos;
-            out.velocity = in.vel;
-            out.torque = in.torque;
-            out.temperature = in.temp;
-            out.error = false;
-            out.warning = (in.status != 0);
-            if (safety_cmd_online_[index]) {
-                const auto& sc = safety_cmd_cache_[index];
-                out.command_position = sc.pos;
-                out.command_velocity = sc.vel;
-                out.command_torque = sc.torque;
-                out.command_kp = sc.kp;
-                out.command_kd = sc.kd;
-                out.kp = sc.kp;
-                out.kd = sc.kd;
-            } else {
-                out.command_position = 0.0;
-                out.command_velocity = 0.0;
-                out.command_torque = 0.0;
-                out.command_kp = 0.0;
-                out.command_kd = 0.0;
-                out.kp = 0.0;
-                out.kd = 0.0;
+        for (int i = 0; i < kJointCount; i++) {
+            const auto& s = state_cache_[i];
+            wsbridge::MotorSnapshot snap{};
+            snap.id      = i;
+            snap.name    = joints_[i].name;
+            snap.mode    = (s.status == 0) ? "IDLE" : "POSITION";
+            snap.position    = s.pos;
+            snap.velocity    = s.vel;
+            snap.torque      = s.torque;
+            snap.temperature = s.temp;
+            snap.warning     = (s.status != 0);
+            snap.enabled     = motor_power_on_[i];
+
+            if (safety_cmd_online_[i]) {
+                snap.command_position = safety_cmd_cache_[i].pos;
+                snap.command_velocity = safety_cmd_cache_[i].vel;
+                snap.command_torque   = safety_cmd_cache_[i].torque;
+                snap.command_kp       = safety_cmd_cache_[i].kp;
+                snap.command_kd       = safety_cmd_cache_[i].kd;
+                snap.kp = safety_cmd_cache_[i].kp;
+                snap.kd = safety_cmd_cache_[i].kd;
             }
-            if (applied_cmd_online_[index]) {
-                const auto& applied = applied_cmd_cache_[index];
-                out.driver_command_position = applied.pos;
-                out.driver_command_velocity = applied.vel;
-                out.driver_command_torque = applied.torque;
-                out.driver_command_kp = applied.kp;
-                out.driver_command_kd = applied.kd;
-            } else {
-                out.driver_command_position = 0.0;
-                out.driver_command_velocity = 0.0;
-                out.driver_command_torque = 0.0;
-                out.driver_command_kp = 0.0;
-                out.driver_command_kd = 0.0;
+            if (applied_cmd_online_[i]) {
+                snap.driver_command_position = applied_cmd_cache_[i].pos;
+                snap.driver_command_velocity = applied_cmd_cache_[i].vel;
+                snap.driver_command_torque   = applied_cmd_cache_[i].torque;
+                snap.driver_command_kp       = applied_cmd_cache_[i].kp;
+                snap.driver_command_kd       = applied_cmd_cache_[i].kd;
             }
-            out.enabled = motor_on_actual_[index];
-            state.motors.push_back(std::move(out));
+            st.motors.push_back(std::move(snap));
+
+            // joint_states 맵에도 추가
+            st.joint_states[joints_[i].name] = state_cache_[i].pos;
         }
 
-        if (imu_online_) {
-            state.imu.rpy = quat_to_rpy(
-                imu_cache_.orientation.w,
-                imu_cache_.orientation.x,
-                imu_cache_.orientation.y,
-                imu_cache_.orientation.z
-            );
-            state.imu.gyro = {imu_cache_.gyro.x, imu_cache_.gyro.y, imu_cache_.gyro.z};
-            state.imu.accel = {imu_cache_.acc.x, imu_cache_.acc.y, imu_cache_.acc.z};
-        } else {
-            state.imu.rpy = {0.0, 0.0, 0.0};
-            state.imu.gyro = {0.0, 0.0, 0.0};
-            state.imu.accel = {0.0, 0.0, 0.0};
-        }
+        // 데이터 로거 상태
+        st.data_logger.recording    = logger_info_.recording;
+        st.data_logger.sample_count = logger_info_.sample_count;
+        st.data_logger.filename     = logger_info_.filename;
 
-        // state.joint_states.clear();
-        std::vector<std::string> joint_names = p_joint_names_.read();
-        state.joint_states[joint_names[0]] = 0;//motor_cache_[0].pos;
-        state.joint_states[joint_names[1]] = 0;//motor_cache_[2].pos;
-        state.joint_states[joint_names[2]] = 0;//motor_cache_[4].pos;
-        state.joint_states[joint_names[3]] = 0;//motor_cache_[6].pos;
-        state.joint_states[joint_names[4]] = 0;//motor_cache_[8].pos;
-        state.joint_states[joint_names[5]] = 0;//motor_cache_[10].pos;
-        state.joint_states[joint_names[6]] = 0;//motor_cache_[1].pos;
-        state.joint_states[joint_names[7]] = 0;//motor_cache_[3].pos;
-        state.joint_states[joint_names[8]] = 0;//motor_cache_[5].pos;
-        state.joint_states[joint_names[9]] = 0;//motor_cache_[7].pos;
-        state.joint_states[joint_names[10]] = 0;//motor_cache_[9].pos;
-        state.joint_states[joint_names[11]] = 0;//motor_cache_[11].pos;
-
-        return state;
+        return st;
     }
 
+    // ── 이벤트 처리 ──
     void handle_event(const wsbridge::Event& ev) {
         switch (ev.kind) {
-        case wsbridge::Event::Kind::SubscribeState:
-            break;
-
-        case wsbridge::Event::Kind::MotorPower:
-            handle_motor_power(ev.power);
-            break;
-
-        case wsbridge::Event::Kind::MotorCommand:
-            handle_motor_command(ev.command);
-            break;
-
-        case wsbridge::Event::Kind::MotorControlRequest:
-            handle_motor_control_request(ev.control_request);
-            break;
-
-        case wsbridge::Event::Kind::RobotModeRequest:
-            handle_robot_mode_request(ev.robot_mode_request);
-            break;
-
-        case wsbridge::Event::Kind::SafetyReset:
-            handle_safety_reset(ev.safety_reset);
-            break;
+            case wsbridge::Event::Kind::SubscribeState:
+                break;
+            case wsbridge::Event::Kind::MotorPower:
+                handle_motor_power(ev.power);
+                break;
+            case wsbridge::Event::Kind::MotorCommand:
+                handle_motor_command(ev.command);
+                break;
+            case wsbridge::Event::Kind::MotorControlRequest:
+                handle_control_request(ev.control_request);
+                break;
+            case wsbridge::Event::Kind::RobotModeRequest:
+                handle_mode_request(ev.robot_mode_request);
+                break;
+            case wsbridge::Event::Kind::SafetyReset:
+                handle_safety_reset(ev.safety_reset);
+                break;
+            case wsbridge::Event::Kind::DataLogger:
+                handle_data_logger(ev.data_logger);
+                break;
         }
+    }
+
+    void handle_control_request(const wsbridge::Event::ControlRequestPayload& req) {
+        control_requested_ = req.request;
+        if (!req.request) control_granted_ = false;
+        dw_control_request_.write(req.request);
+        getLogger()->info("[{}] control_request={}", getName(), req.request);
+    }
+
+    // IDLE(0) / MANU(1) 만 허용
+    void handle_mode_request(const wsbridge::Event::RobotModeRequestPayload& req) {
+        int mode = -1;
+        if (req.mode == "IDLE") mode = 0;
+        else if (req.mode == "MANU") mode = 1;
+
+        if (mode < 0) {
+            getLogger()->warn("[{}] Mode '{}' not supported for manipulator", getName(), req.mode);
+            return;
+        }
+        dw_robot_mode_req_.write(mode);
+        getLogger()->info("[{}] mode_request={}", getName(), req.mode);
     }
 
     void handle_safety_reset(const wsbridge::Event::SafetyResetPayload& req) {
-        if (!req.request) {
-            return;
-        }
-
+        if (!req.request) return;
         dw_safety_reset_.write();
-        getLogger()->info("[{}] Safety reset requested from GUI", getName());
+        getLogger()->info("[{}] safety reset requested", getName());
     }
 
-    void handle_robot_mode_request(const wsbridge::Event::RobotModeRequestPayload& req) {
-        const auto mode = robot_mode_from_string(req.mode);
-        if (!mode.has_value()) {
-            getLogger()->warn("[{}] Ignoring robot mode request: unsupported mode='{}'", getName(), req.mode);
-            return;
-        }
-
-        dw_robot_mode_request_.write(*mode);
-        getLogger()->info("[{}] Robot mode request={} received from GUI", getName(), req.mode);
-    }
-
-    void handle_motor_control_request(const wsbridge::Event::ControlRequestPayload& req) {
-        control_requested_ = req.request;
-        if (!req.request) {
-            control_granted_ = false;
-        }
-        dw_motor_control_request_.write(req.request);
-        getLogger()->info("[{}] Motor control request={} received from GUI", getName(), req.request ? "true" : "false");
-    }
-
-    void handle_motor_power(const wsbridge::Event::PowerPayload& power) {
+    void handle_motor_power(const wsbridge::Event::PowerPayload& pwr) {
         if (!control_granted_) {
-            getLogger()->warn("[{}] Ignoring motor power from GUI: control not granted", getName());
+            getLogger()->warn("[{}] motor power ignored: not granted", getName());
             return;
         }
-
-        if (power.is_all) {
-            for (int index = 0; index < kMotorCount; ++index) {
-                motors_[index].on.write(power.on);
-                motor_power_on_[index] = power.on;
-                getLogger()->debug("[{}] Set power {} for motor {} ({})", getName(), power.on ? "ON" : "OFF", index, motors_[index].name);
-            }
-            return;
-        }
-
-        if (power.motor_id < 0 || power.motor_id >= kMotorCount) {
-            return;
-        }
-
-        motors_[power.motor_id].on.write(power.on);
-        motor_power_on_[power.motor_id] = power.on;
-        getLogger()->debug("[{}] Set power {} for motor {} ({})", getName(), power.on ? "ON" : "OFF", power.motor_id, motors_[power.motor_id].name);
-    }
-
-    void handle_motor_command(const wsbridge::Event::CommandPayload& command) {
-        if (!control_granted_) {
-            getLogger()->warn("[{}] Ignoring motor command from GUI: control not granted", getName());
-            return;
-        }
-
-        auto apply = [&](int index) {
-            if (index < 0 || index >= kMotorCount) {
-                return;
-            }
-
-            auto& cmd = cmd_cache_[index];
-            std::memset(cmd.name, 0, sizeof(cmd.name));
-            std::snprintf(cmd.name, sizeof(cmd.name), "%s", motors_[index].name);
-
-            if (command.cmd.position) cmd.pos = *command.cmd.position;
-            if (command.cmd.velocity) cmd.vel = *command.cmd.velocity;
-            if (command.cmd.torque) cmd.torque = *command.cmd.torque;
-            if (command.cmd.kp) cmd.kp = *command.cmd.kp;
-            if (command.cmd.kd) cmd.kd = *command.cmd.kd;
-            cmd.duration_ms = command.cmd.duration_ms;
-
-            motors_[index].cmd.write(cmd);
-            getLogger()->debug("[{}] Set command for motor {} ({}): pos={}, vel={}, torque={}, kp={}, kd={}", getName(),
-                               index, motors_[index].name, cmd.pos, cmd.vel, cmd.torque, cmd.kp, cmd.kd);
+        auto apply = [&](int idx) {
+            if (idx < 0 || idx >= kJointCount) return;
+            joints_[idx].on.write(pwr.on);
+            motor_power_on_[idx] = pwr.on;
         };
+        if (pwr.is_all) for (int i = 0; i < kJointCount; i++) apply(i);
+        else apply(pwr.motor_id);
+    }
 
-        if (command.is_all) {
-            for (int index = 0; index < kMotorCount; ++index) {
-                apply(index);
-            }
+    void handle_motor_command(const wsbridge::Event::CommandPayload& cmd) {
+        if (!control_granted_) {
+            getLogger()->warn("[{}] motor cmd ignored: not granted", getName());
             return;
         }
+        auto apply = [&](int idx) {
+            if (idx < 0 || idx >= kJointCount) return;
+            auto& c = cmd_cache_[idx];
+            std::snprintf(c.name, sizeof(c.name), "%s", joints_[idx].name);
+            if (cmd.cmd.position)  c.pos    = *cmd.cmd.position;
+            if (cmd.cmd.velocity)  c.vel    = *cmd.cmd.velocity;
+            if (cmd.cmd.torque)    c.torque = *cmd.cmd.torque;
+            if (cmd.cmd.kp)        c.kp     = *cmd.cmd.kp;
+            if (cmd.cmd.kd)        c.kd     = *cmd.cmd.kd;
+            // yaml 파라미터가 있으면 GUI 값 무시하고 적용
+            const double yaml_dur_ms = p_default_duration_sec.read() * 1000.0;
+            c.duration_ms = (yaml_dur_ms >= 0.0) ? yaml_dur_ms : cmd.cmd.duration_ms;
+            joints_[idx].cmd.write(c);
+        };
+        if (cmd.is_all) for (int i = 0; i < kJointCount; i++) apply(i);
+        else apply(cmd.motor_id);
+    }
 
-        apply(command.motor_id);
+    void handle_data_logger(const wsbridge::Event::DataLoggerPayload& payload) {
+        dw_record_cmd_.write(payload.start);
+        getLogger()->info("[{}] data_logger record={}", getName(), payload.start);
+    }
+
+    // ── 유틸리티 ──
+    static std::string robot_mode_to_string(int mode) {
+        return mode == 1 ? "MANU" : "IDLE";
     }
 };
 

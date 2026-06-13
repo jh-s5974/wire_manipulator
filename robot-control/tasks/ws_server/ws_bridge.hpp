@@ -81,6 +81,12 @@ struct BridgeState {
         bool restoring = false;
     } safety;
 
+    struct DataLoggerSnapshot {
+        bool recording    = false;
+        int  sample_count = 0;
+        std::string filename;
+    } data_logger;
+
     std::vector<MotorSnapshot> motors;
     ImuSnapshot imu;
     std::unordered_map<std::string, double> joint_states;
@@ -127,6 +133,11 @@ inline void to_json(json& j, const BridgeState& s) {
         {"control", {{"requested", s.control.requested}, {"granted", s.control.granted}}},
         {"robot_mode", {{"current", s.robot_mode.current}, {"walk_ready", s.robot_mode.walk_ready}}},
         {"safety", {{"level", s.safety.level}, {"locked", s.safety.locked}, {"restoring", s.safety.restoring}}},
+        {"data_logger", {
+            {"recording",    s.data_logger.recording},
+            {"sample_count", s.data_logger.sample_count},
+            {"filename",     s.data_logger.filename}
+        }},
         {"motors", s.motors},
         {"imu", s.imu},
         {"joint_states", s.joint_states}
@@ -175,13 +186,18 @@ struct Event {
         bool request = true;
     };
 
+    struct DataLoggerPayload {
+        bool start = false;
+    };
+
     enum class Kind {
         SubscribeState,
         MotorPower,
         MotorCommand,
         MotorControlRequest,
         RobotModeRequest,
-        SafetyReset
+        SafetyReset,
+        DataLogger
     } kind;
 
     std::int64_t timestamp_ms = 0;
@@ -192,6 +208,7 @@ struct Event {
     ControlRequestPayload control_request;
     RobotModeRequestPayload robot_mode_request;
     SafetyResetPayload safety_reset;
+    DataLoggerPayload data_logger;
 };
 
 } // namespace wsbridge
@@ -550,6 +567,10 @@ private:
             else if (type == "safety_reset") {
                 ev.kind = Event::Kind::SafetyReset;
                 ev.safety_reset.request = payload.value("request", true);
+            }
+            else if (type == "data_logger") {
+                ev.kind = Event::Kind::DataLogger;
+                ev.data_logger.start = payload.value("start", false);
             }
             else {
                 std::cout << "[WS] unknown type: " << type << "\n";

@@ -1,11 +1,8 @@
 // src/App.tsx
 import * as React from "react";
-import { Suspense } from "react";
 import "./App.css";
 import { useRobotWs } from "./hooks/useRobotWs";
-import type { MotorState, ImuState, RobotMode } from "./types";
-import { RobotScene } from "./components/RobotScene";
-import type { JointState } from "./components/UrdfRobot";
+import type { MotorState, RobotMode } from "./types";
 
 const WS_URL =
   import.meta.env.VITE_WS_URL ??
@@ -13,8 +10,6 @@ const WS_URL =
 const getInitialWsPassword = () => {
   return "";
 };
-const ROBOT_MODES: RobotMode[] = ["IDLE", "MANU", "READY", "RL WALK"];
-
 type MotorCommandFields = {
   position: string;
   velocity: string;
@@ -54,61 +49,30 @@ function formatCommandValue(
 }
 
 type JointLimits = {
-  lower: number;      // position lower (rad)
-  upper: number;      // position upper (rad)
-  effortMax: number;  // peak torque (Nm), bar: -effortMax ~ +effortMax
-  velMax: number;     // peak velocity (rad/s), bar: -velMax ~ +velMax
-  kpMax: number;      // kp upper bound, bar: 0 ~ kpMax
-  kdMax: number;      // kd upper bound, bar: 0 ~ kdMax
-  durationMax: number;// duration upper bound (s), bar: 0 ~ durationMax
+  lower: number;       // position lower (rad or m)
+  upper: number;       // position upper (rad or m)
+  effortMax: number;   // peak torque/force (Nm or N)
+  velMax: number;      // peak velocity (rad/s or m/s)
+  kpMax: number;       // kp upper bound
+  kdMax: number;       // kd upper bound
+  durationMax: number; // duration bar upper bound (s)
+  unit: string;        // "rad" | "m"
+  type: string;        // "revolute" | "prismatic"
 };
 
-// TODO: replace dummy velMax/kpMax/kdMax/durationMax with real values per joint
+// config/robotnl.yaml 및 safety_layer 파라미터와 일치하게 유지
 const JOINT_LIMITS: Record<string, JointLimits> = {
-  //                         pos range (rad)        torque  vel    kp    kd  dur
-  hip_yaw_left:      { lower: -0.698132, upper:  1.570796, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  hip_yaw_right:     { lower: -1.570796, upper:  0.698132, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  hip_roll_left:     { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  hip_roll_right:    { lower: -1.570796, upper:  0.523599, effortMax:  40, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  hip_pitch_left:    { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  hip_pitch_right:   { lower: -0.436332, upper:  1.745329, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  knee_left:         { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  knee_right:        { lower:  0.0,      upper:  2.094395, effortMax:  60, velMax: 15, kpMax: 300, kdMax: 5, durationMax: 10 },
-  ankle_pitch_left:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_pitch_right: { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_roll_left:   { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_roll_right:  { lower: -0.785398, upper:  0.785398, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_upper_left:  { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_upper_right: { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_lower_left:  { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
-  ankle_lower_right: { lower: -1.396263, upper:  1.396263, effortMax:   6, velMax: 20, kpMax: 100, kdMax:  5, durationMax: 10 },
+  //          pos lower     pos upper   effort  vel   kp   kd  dur  unit       type
+  joint0: { lower: -2.094395, upper:  2.094395, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
+  joint1: { lower: -0.523599, upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
+  joint2: { lower: -0.09,     upper:  0.0,      effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
+  joint3: { lower: -1.570796, upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
+  joint4: { lower: -0.095,    upper:  0.0,      effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
 };
 
-const MOTOR_NAMES: string[] = [
-  "hip_yaw_left",
-  "hip_yaw_right",
-  "hip_roll_left",
-  "hip_roll_right",
-  "hip_pitch_left",
-  "hip_pitch_right",
-  "knee_left",
-  "knee_right",
-  "ankle_pitch_left",
-  "ankle_pitch_right",
-  "ankle_roll_left",
-  "ankle_roll_right",
-  "ankle_upper_left",
-  "ankle_upper_right",
-  "ankle_lower_left",
-  "ankle_lower_right",
-];
+const MOTOR_NAMES: string[] = ["joint0", "joint1", "joint2", "joint3", "joint4"];
 
-const NON_CONTROLLABLE_MOTOR_NAMES = new Set<string>([
-  "ankle_upper_left",
-  "ankle_upper_right",
-  "ankle_lower_left",
-  "ankle_lower_right",
-]);
+const NON_CONTROLLABLE_MOTOR_NAMES = new Set<string>();
 
 function isMotorControlEnabled(name?: string) {
   if (!name) return true;
@@ -362,46 +326,42 @@ function makeInitialCommand(m: MotorState): MotorCommandFields {
   };
 }
 
-function ImuTable({ imu }: { imu: ImuState | null }) {
-  const renderNum = (value: number | undefined) =>
-    value === undefined ? "N/A" : value.toFixed(3);
-
-  const roll = imu?.orientation_rpy.roll;
-  const pitch = imu?.orientation_rpy.pitch;
-  const yaw = imu?.orientation_rpy.yaw;
-  const gx = imu?.angular_velocity.x;
-  const gy = imu?.angular_velocity.y;
-  const gz = imu?.angular_velocity.z;
-  const ax = imu?.linear_acceleration.x;
-  const ay = imu?.linear_acceleration.y;
-  const az = imu?.linear_acceleration.z;
-
+function JointLimitsTable() {
   return (
-    <div className="card card-imu">
+    <div className="card card-limits">
       <div className="card-header">
-        <h3>IMU</h3>
+        <h3>Joint Limits</h3>
+        <span className="limits-note">config/robotnl.yaml 기준</span>
       </div>
       <div className="table-wrapper">
-        <table className="data-table data-table-imu">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Joint</th>
+              <th>Type</th>
+              <th>Unit</th>
+              <th>Pos Min</th>
+              <th>Pos Max</th>
+              <th>Vel Max</th>
+              <th>Effort Max</th>
+              <th>Kp Max</th>
+              <th>Kd Max</th>
+            </tr>
+          </thead>
           <tbody>
-            <tr>
-              <th>Orientation (RPY)</th>
-              <td>
-                R={renderNum(roll)}, P={renderNum(pitch)}, Y={renderNum(yaw)}
-              </td>
-            </tr>
-            <tr>
-              <th>Gyro (rad/s)</th>
-              <td>
-                x={renderNum(gx)}, y={renderNum(gy)}, z={renderNum(gz)}
-              </td>
-            </tr>
-            <tr>
-              <th>Accel (m/s²)</th>
-              <td>
-                x={renderNum(ax)}, y={renderNum(ay)}, z={renderNum(az)}
-              </td>
-            </tr>
+            {Object.entries(JOINT_LIMITS).map(([name, lim]) => (
+              <tr key={name}>
+                <td><strong>{name}</strong></td>
+                <td>{lim.type}</td>
+                <td>{lim.unit}</td>
+                <td className="num">{lim.lower.toFixed(4)}</td>
+                <td className="num">{lim.upper.toFixed(4)}</td>
+                <td className="num">{lim.velMax}</td>
+                <td className="num">{lim.effortMax}</td>
+                <td className="num">{lim.kpMax}</td>
+                <td className="num">{lim.kdMax}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -659,7 +619,6 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
 function App() {
   const [wsPassword, setWsPassword] = React.useState(getInitialWsPassword);
   const [authPasswordInput, setAuthPasswordInput] = React.useState(getInitialWsPassword);
-  const [navOpen, setNavOpen] = React.useState(false);
   const {
     connected,
     state,
@@ -668,14 +627,17 @@ function App() {
     sendMotorPower,
     sendMotorCommand,
     sendMotorControlRequest,
-    sendRobotModeRequest,
     sendSafetyReset,
+    sendDataLogger,
     retryAuth,
     manualConnect,
   } = useRobotWs({
     url: WS_URL,
     password: wsPassword,
   });
+
+  const loggerState = state?.data_logger;
+  const isRecording = loggerState?.recording ?? false;
 
   const [authRetryNow, setAuthRetryNow] = React.useState(Date.now());
 
@@ -701,7 +663,6 @@ function App() {
   // 일괄 입력 상태
   const [selectedMotorIds, setSelectedMotorIds] = React.useState<Set<number>>(new Set());
   const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
-  const [showUrdf, setShowUrdf] = React.useState(true);
   const [showPlot, setShowPlot] = React.useState(false);
   const [plotPaused, setPlotPaused] = React.useState(false);
   const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
@@ -1119,10 +1080,6 @@ function App() {
     sendMotorControlRequest(false);
   };
 
-  const handleRobotModeRequest = (mode: RobotMode) => {
-    sendRobotModeRequest(mode);
-  };
-
   const handleSafetyReset = () => {
     sendSafetyReset();
   };
@@ -1211,8 +1168,6 @@ function App() {
   const currentSafetyLevel = state?.safety?.level ?? "ESSENTIAL";
   const safetyLocked = state?.safety?.locked ?? false;
   const safetyRestoring = state?.safety?.restoring ?? false;
-  const walkReady = state?.robot_mode?.walk_ready ?? false;
-
   const addPlotPanel = () => {
     const nextId = nextPlotIdRef.current;
     nextPlotIdRef.current += 1;
@@ -1356,33 +1311,10 @@ function App() {
     [controlMotors, selectedMotorIds],
   );
 
-  // 로봇에서 직접 받은 joint_states 사용 (없으면 빈 객체)
-  const urdfJointState = React.useMemo<JointState>(
-    () => state?.joint_states ?? {},
-    [state?.joint_states],
-  );
-
   const retryRemainingMs = authRetryAt ? Math.max(0, authRetryAt - authRetryNow) : 0;
   const retryRemainingSec = Math.ceil(retryRemainingMs / 1000);
   const canInputPassword = authStatus === "required" || authStatus === "failed";
   const canSubmitPassword = canInputPassword && retryRemainingMs <= 0 && authPasswordInput.trim().length > 0;
-
-  React.useEffect(() => {
-    if (!navOpen) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNavOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [navOpen]);
 
   const handleAuthRetry = (event?: React.FormEvent) => {
     event?.preventDefault();
@@ -1454,31 +1386,8 @@ function App() {
     <div className="app-shell">
       <div className="top-mode-bar">
         <div className="top-mode-content">
-          <button
-            className="btn btn-secondary btn-xs nav-menu-btn"
-            onClick={() => setNavOpen(true)}
-            aria-label="Open navigator"
-          >
-            Menu
-          </button>
-          <span className="toolbar-label">로봇 모드:</span>
-          <div className="mode-actions">
-            {ROBOT_MODES.map((mode) => (
-              <button
-                key={mode}
-                className={`btn btn-secondary btn-xs mode-btn ${currentRobotMode === mode ? "mode-btn-active" : ""}`}
-                onClick={() => handleRobotModeRequest(mode)}
-                disabled={!connected || !state}
-              >
-                {currentRobotMode === mode && <span className="mode-btn-dot" aria-hidden="true" />}
-                {mode}
-              </button>
-            ))}
-          </div>
-          <div className="top-connection">
-            <span className={`status-dot ${walkReady ? "dot-ok" : "dot-inactive"}`} />
-            Walk Ready
-          </div>
+          <span className="toolbar-label">모드:</span>
+          <span className="mode-badge">{currentRobotMode}</span>
           <div className="top-connection">
             SAFETY:
             <span>{currentSafetyLevel}</span>
@@ -1513,51 +1422,7 @@ function App() {
       </div>
 
       <div className="app">
-        {navOpen && (
-          <div className="nav-overlay" onClick={() => setNavOpen(false)}>
-            <div className="nav-panel" onClick={(event) => event.stopPropagation()}>
-              <div className="nav-robot-header">
-                <span className="nav-robot-title">3D 뷰어</span>
-                <div className="nav-robot-actions">
-                  <button
-                    className="btn btn-secondary btn-xs"
-                    onClick={() => setShowUrdf((v) => !v)}
-                  >
-                    {showUrdf ? "숨기기" : "보이기"}
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-xs"
-                    onClick={() => setNavOpen(false)}
-                  >
-                    닫기
-                  </button>
-                </div>
-              </div>
-              {showUrdf && (
-                <div className="nav-robot-viewer">
-                  <Suspense fallback={<div className="nav-robot-loading">Loading...</div>}>
-                    <RobotScene jointState={urdfJointState} imuState={state?.imu} />
-                  </Suspense>
-                </div>
-              )}
-
-              <div className="nav-content">
-                <h3>Navigator</h3>
-                <p className="nav-desc">
-                  나중에 다른 화면으로 이동할 메뉴/탭을 여기 배치하면 됩니다.
-                </p>
-                <ul className="nav-list">
-                  <li className="nav-item active">모터 &amp; IMU 모니터</li>
-                  <li className="nav-item">로그 뷰어 (예정)</li>
-                  <li className="nav-item">설정 / 튜닝 (예정)</li>
-                  <li className="nav-item">디버그 패널 (예정)</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 오른쪽: 메인 모니터 */}
+        {/* 메인 모니터 */}
         <div className="main-panel">
           <header className="header">
             <h2>Robot Monitor</h2>
@@ -1596,6 +1461,25 @@ function App() {
             <button className="btn btn-secondary btn-xs" onClick={() => setShowPlot((prev) => !prev)}>
               {showPlot ? "Plot Hide" : "Plot Show"}
             </button>
+            <div className="record-group">
+              <button
+                className={isRecording ? "btn btn-record-stop btn-xs" : "btn btn-record btn-xs"}
+                onClick={() => sendDataLogger(!isRecording)}
+                disabled={!connected}
+                title={isRecording ? "기록 중지" : "조인트 데이터 CSV 기록 시작"}
+              >
+                {isRecording ? "■ Stop" : "● Record"}
+              </button>
+              {loggerState && (
+                <span className="record-status">
+                  {isRecording
+                    ? `${loggerState.sample_count.toLocaleString()} samples`
+                    : loggerState.sample_count > 0
+                      ? `저장됨: ${loggerState.filename.split("/").pop()}`
+                      : ""}
+                </span>
+              )}
+            </div>
           </div>
 
           <>
@@ -1747,9 +1631,9 @@ function App() {
               </div>
             </div>
 
-            {/* 아래쪽에 IMU 카드 – 폭을 줄여서 덜 허전하게 */}
+            {/* Joint Limits 카드 — config/robotnl.yaml 기준 */}
             <div className="bottom-row">
-              <ImuTable imu={state?.imu ?? null} />
+              <JointLimitsTable />
             </div>
 
             {showPlot && (

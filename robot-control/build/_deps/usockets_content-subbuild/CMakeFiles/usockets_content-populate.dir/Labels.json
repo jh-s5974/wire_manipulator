@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/usockets_content-populate"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/usockets_content-populate.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/usockets_content-populate-complete.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-build.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-configure.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-download.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-install.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-patch.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-test.rule"
+		},
+		{
+			"file" : "/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/usockets_content-populate-prefix/src/usockets_content-populate-stamp/usockets_content-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"usockets_content-populate"
+		],
+		"name" : "usockets_content-populate"
+	}
+}

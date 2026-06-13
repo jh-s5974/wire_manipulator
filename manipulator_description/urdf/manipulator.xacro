@@ -1,0 +1,368 @@
+<?xml version="1.0" ?>
+<robot name="manipulator" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find manipulator_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find manipulator_description)/urdf/manipulator.trans" />
+<xacro:include filename="$(find manipulator_description)/urdf/manipulator.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-1.5959846072127314e-07 -0.028736987524623933 -0.021211975837110052" rpy="0 0 0"/>
+    <mass value="1.1561739300518727"/>
+    <inertia ixx="0.014916" iyy="0.008076" izz="0.022252" ixy="0.0" iyz="-0.000245" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="yaw_link_1">
+  <inertial>
+    <origin xyz="-0.012333209302716395 -0.0028982397268636777 0.07034612449741852" rpy="0 0 0"/>
+    <mass value="1.6664689383653837"/>
+    <inertia ixx="0.009588" iyy="0.010212" izz="0.009638" ixy="-4e-06" iyz="-0.000256" ixz="-0.001462"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 -0.0 -0.0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 -0.0 -0.0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="wheel_bl_1">
+  <inertial>
+    <origin xyz="0.02273313194216675 5.34003687407969e-07 -7.02313676496924e-06" rpy="0 0 0"/>
+    <mass value="0.053533353973712464"/>
+    <inertia ixx="2.5e-05" iyy="1.8e-05" izz="1.8e-05" ixy="-0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.145 0.171 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_bl_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.145 0.171 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_bl_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="wheel_fl_1">
+  <inertial>
+    <origin xyz="0.022733131942164864 5.192144494625683e-07 -7.024251936570136e-06" rpy="0 0 0"/>
+    <mass value="0.05353335397546931"/>
+    <inertia ixx="2.5e-05" iyy="1.8e-05" izz="1.8e-05" ixy="-0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.145 -0.139 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_fl_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.145 -0.139 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_fl_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="wheel_br_1">
+  <inertial>
+    <origin xyz="-0.022733132488897606 2.8472478019736513e-06 6.442224850494727e-06" rpy="0 0 0"/>
+    <mass value="0.05353335889119238"/>
+    <inertia ixx="2.5e-05" iyy="1.8e-05" izz="1.8e-05" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.145 0.171 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_br_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.145 0.171 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_br_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="wheel_fr_1">
+  <inertial>
+    <origin xyz="-0.02273313207526098 4.447068879226412e-06 5.4619875834924225e-06" rpy="0 0 0"/>
+    <mass value="0.053533353837042455"/>
+    <inertia ixx="2.5e-05" iyy="1.8e-05" izz="1.8e-05" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.145 -0.139 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_fr_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.145 -0.139 0.045" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/wheel_fr_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lower_link1_1">
+  <inertial>
+    <origin xyz="-0.03955886011982533 -0.007913665670312582 7.382983113757291e-15" rpy="0 0 0"/>
+    <mass value="0.39469837349211956"/>
+    <inertia ixx="0.00253" iyy="0.000279" izz="0.002554" ixy="-1e-06" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.005 -0.0 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/lower_link1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.005 -0.0 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/lower_link1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lower_link2_1">
+  <inertial>
+    <origin xyz="-0.28882108099533427 0.025037462192090187 0.0007732290024642097" rpy="0 0 0"/>
+    <mass value="0.48373366369510884"/>
+    <inertia ixx="0.002597" iyy="0.000395" izz="0.002445" ixy="-3e-06" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.255 -0.1348 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/lower_link2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.255 -0.1348 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/lower_link2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="guide1_1">
+  <inertial>
+    <origin xyz="-0.00504175589790494 0.04674999999984206 -8.132383655379272e-15" rpy="0 0 0"/>
+    <mass value="0.03052914603529884"/>
+    <inertia ixx="3.5e-05" iyy="2e-06" izz="3.3e-05" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.07265 -0.2048 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.07265 -0.2048 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="upper_link1_1">
+  <inertial>
+    <origin xyz="0.048813112872322484 0.09022766849933528 -1.2394429488304937e-07" rpy="0 0 0"/>
+    <mass value="0.7296367060945119"/>
+    <inertia ixx="0.00632" iyy="0.000624" izz="0.006514" ixy="-0.000515" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.07265 -0.2983 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/upper_link1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.07265 -0.2983 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/upper_link1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="guide2_1">
+  <inertial>
+    <origin xyz="0.009960145389847063 0.0467500000001462 -4.579669976578771e-15" rpy="0 0 0"/>
+    <mass value="0.045777996952853076"/>
+    <inertia ixx="6.9e-05" iyy="5e-06" izz="7e-05" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.00305 -0.2048 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.00305 -0.2048 -0.195459" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="guide2_1">
+  <inertial>
+    <origin xyz="-0.2783898546101529 0.03454600000014621 0.0007719999999954152" rpy="0 0 0"/>
+    <mass value="0.045777996952853076"/>
+    <inertia ixx="6.9e-05" iyy="5e-06" izz="7e-05" ixy="0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.2914 -0.217004 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.2914 -0.217004 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/guide2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="upper_link2_1">
+  <inertial>
+    <origin xyz="-0.30119759028419013 0.051859043246120784 0.0011136282630454797" rpy="0 0 0"/>
+    <mass value="0.3547989678743507"/>
+    <inertia ixx="0.001653" iyy="0.000368" izz="0.001635" ixy="2.8e-05" iyz="-8e-06" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.2925 -0.476121 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/upper_link2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.2925 -0.476121 -0.194687" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://manipulator_description/meshes/upper_link2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="yaw1" type="revolute">
+  <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="yaw_link_1"/>
+  <axis xyz="0.0 -0.0 -1.0"/>
+  <limit upper="2.094395" lower="-2.094395" effort="100" velocity="100"/>
+</joint>
+
+<joint name="br" type="continuous">
+  <origin xyz="0.145 -0.171 -0.045" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="wheel_bl_1"/>
+  <axis xyz="-1.0 0.0 0.0"/>
+</joint>
+
+<joint name="fr" type="continuous">
+  <origin xyz="0.145 0.139 -0.045" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="wheel_fl_1"/>
+  <axis xyz="-1.0 0.0 -0.0"/>
+</joint>
+
+<joint name="bl" type="continuous">
+  <origin xyz="-0.145 -0.171 -0.045" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="wheel_br_1"/>
+  <axis xyz="1.0 -0.0 -0.0"/>
+</joint>
+
+<joint name="fl" type="continuous">
+  <origin xyz="-0.145 0.139 -0.045" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="wheel_fr_1"/>
+  <axis xyz="1.0 -0.0 0.0"/>
+</joint>
+
+<joint name="pitch1" type="revolute">
+  <origin xyz="0.005 0.0 0.195459" rpy="0 0 0"/>
+  <parent link="yaw_link_1"/>
+  <child link="lower_link1_1"/>
+  <axis xyz="1.0 -0.0 -0.0"/>
+  <limit upper="1.570796" lower="-0.523599" effort="100" velocity="100"/>
+</joint>
+
+<joint name="pris1" type="prismatic">
+  <origin xyz="0.25 0.1348 -0.000772" rpy="0 0 0"/>
+  <parent link="lower_link1_1"/>
+  <child link="lower_link2_1"/>
+  <axis xyz="-0.0 -1.0 0.0"/>
+  <limit upper="0.0" lower="-0.09" effort="100" velocity="100"/>
+</joint>
+
+<joint name="pitch2" type="continuous">
+  <origin xyz="-0.32765 0.07 0.000772" rpy="0 0 0"/>
+  <parent link="lower_link2_1"/>
+  <child link="guide1_1"/>
+  <axis xyz="-1.0 0.0 -0.0"/>
+</joint>
+
+<joint name="pitch3" type="continuous">
+  <origin xyz="0.0 0.0935 0.0" rpy="0 0 0"/>
+  <parent link="guide1_1"/>
+  <child link="upper_link1_1"/>
+  <axis xyz="1.0 -0.0 0.0"/>
+</joint>
+
+<joint name="pitch4" type="continuous">
+  <origin xyz="0.0364 0.082204 0.0" rpy="0 0 0"/>
+  <parent link="lower_link2_1"/>
+  <child link="guide2_1"/>
+  <axis xyz="-1.0 0.0 -0.0"/>
+</joint>
+
+<joint name="pitch5" type="continuous">
+  <origin xyz="0.36405 -0.081296 -0.000772" rpy="0 0 0"/>
+  <parent link="upper_link1_1"/>
+  <child link="guide2_1"/>
+  <axis xyz="1.0 -0.0 0.0"/>
+</joint>
+
+<joint name="pris2" type="prismatic">
+  <origin xyz="0.36515 0.177821 -0.000772" rpy="0 0 0"/>
+  <parent link="upper_link1_1"/>
+  <child link="upper_link2_1"/>
+  <axis xyz="-0.0 -1.0 0.0"/>
+  <limit upper="0.0" lower="-0.095" effort="100" velocity="100"/>
+</joint>
+
+</robot>
