@@ -17,7 +17,7 @@
 
     <!-- meshdir는 MJCF 파일 위치 기준 상대경로 -->
     <compiler angle="radian"
-              meshdir="/home/jh/wire_manipulator/manipulator_description/meshes"
+              meshdir="../../manipulator_description/meshes"
               autolimits="true"/>
 
     <option gravity="0 0 -9.81" timestep="0.001"/>
