@@ -123,6 +123,7 @@ public:
                         st.status  = motors[i]->state.status;
                         st.enabled = on_flag[i];
                         dw_joint_state[i].write(st);
+                        dw_phys_state_[i].write(st); // 물리 모터 raw 상태 (GUI 모터 뷰용)
 
                         joint_fb_pos_[i] = motors[i]->state.pos;
                         break;
@@ -222,6 +223,11 @@ private:
     DataWriter<custom_types::MotorState> dw_joint_state[N] = {
         DataWriter<custom_types::MotorState>{"joint0/state", ArchiveOption::Enable},
         DataWriter<custom_types::MotorState>{"joint1/state", ArchiveOption::Enable},
+    };
+    // 물리 모터 raw 상태 (GUI 모터 뷰용)
+    DataWriter<custom_types::MotorState> dw_phys_state_[N] = {
+        DataWriter<custom_types::MotorState>{"phys_motor/m01/state"},
+        DataWriter<custom_types::MotorState>{"phys_motor/m02/state"},
     };
     DataWriter<custom_types::MotorCmd> dw_joint_cmd_applied[N] = {
         DataWriter<custom_types::MotorCmd>{"joint0/cmd_applied", ArchiveOption::Enable},

@@ -47,6 +47,17 @@ public:
 private:
     // ── 조인트 수 ──
     static constexpr int kJointCount = 5;
+    // ── 물리 모터 수 및 채널 이름 ──
+    static constexpr int kPhysCount = 7;
+    static constexpr const char* kPhysChannels[kPhysCount] = {
+        "phys_motor/m01/state", "phys_motor/m02/state",
+        "phys_motor/m03/state", "phys_motor/m04/state",
+        "phys_motor/m05/state", "phys_motor/m06/state",
+        "phys_motor/m07/state",
+    };
+    static constexpr const char* kPhysNames[kPhysCount] = {
+        "m01","m02","m03","m04","m05","m06","m07"
+    };
 
     struct JointIo {
         const char* name;
@@ -90,6 +101,17 @@ private:
          DataWriter<bool>                    {"gui/joint4/on"}},
     }};
 
+    // ── 물리 모터 상태 채널 (GUI 모터 뷰용) ──
+    DataReader<custom_types::MotorState> dr_phys_state_[kPhysCount] = {
+        DataReader<custom_types::MotorState>{kPhysChannels[0], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[1], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[2], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[3], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[4], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[5], DependencyType::Weak},
+        DataReader<custom_types::MotorState>{kPhysChannels[6], DependencyType::Weak},
+    };
+
     // 공통 GUI 상태 채널
     DataReader<bool> dr_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
     DataReader<bool> dr_control_granted_  {"gui/motor/control_granted",   DependencyType::Weak};
@@ -111,6 +133,8 @@ private:
     wsbridge::WebsocketBridge bridge_{8080};
 
     // ── 캐시 ──
+    std::array<custom_types::MotorState, kPhysCount>  phys_state_cache_{};
+    std::array<bool,                     kPhysCount>  phys_online_{};
     std::array<custom_types::MotorState, kJointCount> state_cache_{};
     std::array<custom_types::MotorCmd,   kJointCount> safety_cmd_cache_{};
     std::array<bool,                     kJointCount> safety_cmd_online_{};
@@ -130,6 +154,12 @@ private:
 
     // ── 입력 갱신 ──
     void update_inputs() {
+        for (int i = 0; i < kPhysCount; i++) {
+            dr_phys_state_[i].on_update([&, i](const custom_types::MotorState& d) {
+                phys_state_cache_[i] = d;
+                phys_online_[i]      = true;
+            });
+        }
         for (int i = 0; i < kJointCount; i++) {
             joints_[i].state.on_update([&, i](const custom_types::MotorState& d) {
                 state_cache_[i]  = d;
@@ -195,6 +225,20 @@ private:
 
             // joint_states 맵에도 추가
             st.joint_states[joints_[i].name] = state_cache_[i].pos;
+        }
+
+        // 물리 모터 raw 상태 (GUI 모터 뷰용)
+        for (int i = 0; i < kPhysCount; i++) {
+            const auto& ps = phys_state_cache_[i];
+            wsbridge::MotorSnapshot psnap{};
+            psnap.id       = i + 1; // 1-based: m01=1, m02=2, ...
+            psnap.name     = kPhysNames[i];
+            psnap.mode     = phys_online_[i] ? "RAW" : "N/A";
+            psnap.position = ps.pos;
+            psnap.velocity = ps.vel;
+            psnap.torque   = ps.torque;
+            psnap.enabled  = ps.enabled;
+            st.physical_motors.push_back(std::move(psnap));
         }
 
         // 데이터 로거 상태

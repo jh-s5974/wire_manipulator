@@ -1,3 +1,0 @@
-repository='https://github.com/uNetworking/uWebSockets'
-module=''
-tag='origin'

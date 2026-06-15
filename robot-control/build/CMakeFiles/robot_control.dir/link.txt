@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/robot_control.dir/robot_control.cpp.o -o robot_control  external/librtfw/rtfw/librtfw.a external/librtfw/rtfw-connect/librtfw-connect.a external/librtfw/rtfw-common/librtfw-common.a /usr/lib/x86_64-linux-gnu/libyaml-cpp.so.0.7.0 -lpthread -lrt external/uSockets/libuSockets.a /usr/lib/x86_64-linux-gnu/libz.so 

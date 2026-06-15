@@ -72,6 +72,17 @@ const JOINT_LIMITS: Record<string, JointLimits> = {
 
 const MOTOR_NAMES: string[] = ["joint0", "joint1", "joint2", "joint3", "joint4"];
 
+// 물리 모터 7개 정보 (id: 1-based, jointIdx: 가상 조인트 인덱스)
+const PHYS_MOTOR_INFO = [
+  { id: 1, name: "m01", label: "base_yaw",       jointIdx: 0 },
+  { id: 2, name: "m02", label: "pitch",           jointIdx: 1 },
+  { id: 3, name: "m03", label: "lower_link",      jointIdx: 2 },
+  { id: 4, name: "m04", label: "elbow_A (장력)",  jointIdx: 3 },
+  { id: 5, name: "m05", label: "elbow_B (위치)",  jointIdx: 3 },
+  { id: 6, name: "m06", label: "upper_A",         jointIdx: 4 },
+  { id: 7, name: "m07", label: "upper_B",         jointIdx: 4 },
+] as const;
+
 const NON_CONTROLLABLE_MOTOR_NAMES = new Set<string>();
 
 function isMotorControlEnabled(name?: string) {
@@ -389,9 +400,10 @@ const StatBar = ({ value, min, max, color }: { value: number; min: number; max: 
 interface MotorStatusRowProps {
   motor: MotorState;
   hasData: boolean;
+  inactive?: boolean;
 }
 
-const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData }: MotorStatusRowProps) {
+const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inactive }: MotorStatusRowProps) {
   const limits = motor.name ? JOINT_LIMITS[motor.name] : undefined;
   const renderNum = (v: number | undefined, d = 3) =>
     hasData && typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "N/A";
@@ -414,7 +426,11 @@ const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData }: Mo
     </td>
   );
   return (
-    <tr className={hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}>
+    <tr className={[
+      inactive ? "row-inactive" : "",
+      !inactive && hasData && motor.error ? "row-error" : "",
+      !inactive && hasData && motor.warning ? "row-warning" : "",
+    ].filter(Boolean).join(" ")}>
       <td className="cell-id">{motor.id}</td>
       <td className="cell-name">{motor.name ?? "-"}</td>
       <td className="cell-mode">
@@ -466,6 +482,7 @@ interface MotorCommandRowProps {
   onTogglePower: (motorId: number) => void;
   selected: boolean;
   onToggleSelect: (motorId: number) => void;
+  inactive?: boolean;
 }
 
 const MotorCommandRow = React.memo(function MotorCommandRow({
@@ -480,6 +497,7 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
   onTogglePower,
   selected,
   onToggleSelect,
+  inactive,
 }: MotorCommandRowProps) {
   const limits: JointLimits | undefined = motor.name ? JOINT_LIMITS[motor.name] : undefined;
 
@@ -517,9 +535,12 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
 
   return (
     <tr
-      className={
-        `${hasData && motor.error ? "row-error" : hasData && motor.warning ? "row-warning" : ""}${selected ? " row-selected" : ""}`
-      }
+      className={[
+        inactive ? "row-inactive" : "",
+        !inactive && hasData && motor.error ? "row-error" : "",
+        !inactive && hasData && motor.warning ? "row-warning" : "",
+        selected && !inactive ? "row-selected" : "",
+      ].filter(Boolean).join(" ")}
     >
       <td className="cell-check">
         <input
@@ -663,6 +684,7 @@ function App() {
   // 일괄 입력 상태
   const [selectedMotorIds, setSelectedMotorIds] = React.useState<Set<number>>(new Set());
   const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
+  const [showJointView, setShowJointView] = React.useState(true); // true = 조인트 뷰(ON), false = 모터 뷰(OFF)
   const [showPlot, setShowPlot] = React.useState(false);
   const [plotPaused, setPlotPaused] = React.useState(false);
   const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
@@ -908,6 +930,38 @@ function App() {
       }));
     },
     [state],
+  );
+
+  // 물리 모터 상태 (모터 뷰용) — handler들보다 먼저 선언해야 함
+  const displayPhysMotors = React.useMemo<MotorState[]>(() => {
+    if (!state?.physical_motors?.length) {
+      return PHYS_MOTOR_INFO.map((info) => ({
+        id: info.id, name: info.name, mode: "N/A",
+        position: 0, velocity: 0, torque: 0, temperature: 0,
+        error: false, warning: false, enabled: false,
+      }));
+    }
+    return state.physical_motors;
+  }, [state]);
+
+  // 물리 모터 뷰에서 Sync: 물리 모터 현재 위치를 해당 조인트 명령으로 가져옴
+  const handlePhysMotorSyncById = React.useCallback(
+    (physMotorId: number) => {
+      const info = PHYS_MOTOR_INFO.find((m) => m.id === physMotorId);
+      if (!info) return;
+      const physMotor = displayPhysMotors.find((pm) => pm.id === physMotorId);
+      if (!physMotor) return;
+      setMotorCommands((prev) => ({
+        ...prev,
+        [info.jointIdx]: {
+          ...(prev[info.jointIdx] ?? EMPTY_MOTOR_COMMAND),
+          position: formatCommandValue(physMotor.position, "position", "0.00"),
+          velocity: "0.00",
+          torque: "0.00",
+        },
+      }));
+    },
+    [displayPhysMotors],
   );
 
   const handleMotorSendById = React.useCallback(
@@ -1306,6 +1360,7 @@ function App() {
     () => displayMotors.filter((m) => isMotorControlEnabled(m.name)),
     [displayMotors],
   );
+
   const selectedControlMotorCount = React.useMemo(
     () => controlMotors.filter((m) => selectedMotorIds.has(m.id)).length,
     [controlMotors, selectedMotorIds],
@@ -1458,6 +1513,17 @@ function App() {
             <button className="btn btn-secondary btn-xxs" onClick={handleAllOff} disabled={!canControl}>
               Off All
             </button>
+            <label className="toggle-switch" title={showJointView ? "조인트 뷰 ON → 클릭 시 모터 뷰로 전환" : "모터 뷰 ON → 클릭 시 조인트 뷰로 전환"}>
+              <input
+                type="checkbox"
+                checked={showJointView}
+                onChange={() => setShowJointView((prev) => !prev)}
+              />
+              <span className="toggle-slider" />
+            </label>
+            <span className="toolbar-label" style={{ minWidth: 60 }}>
+              {showJointView ? "조인트 뷰" : "모터 뷰"}
+            </span>
             <button className="btn btn-secondary btn-xs" onClick={() => setShowPlot((prev) => !prev)}>
               {showPlot ? "Plot Hide" : "Plot Show"}
             </button>
@@ -1523,8 +1589,19 @@ function App() {
                     </thead>
                     <tbody>
                       <tr className="bulk-spacer-row"><td colSpan={9} /></tr>
-                      {displayMotors.map((m) => (
+                      {/* 활성 섹션 */}
+                      {(showJointView ? displayMotors : displayPhysMotors).map((m) => (
                         <MotorStatusRow key={m.id} motor={m} hasData={hasStateData} />
+                      ))}
+                      {/* 비활성 섹션 구분선 */}
+                      <tr className="view-section-divider">
+                        <td colSpan={9}>
+                          <span>{showJointView ? "▾ 물리 모터 (비활성)" : "▾ 가상 조인트 (비활성)"}</span>
+                        </td>
+                      </tr>
+                      {/* 비활성 섹션 — 연한 회색 */}
+                      {(showJointView ? displayPhysMotors : displayMotors).map((m) => (
+                        <MotorStatusRow key={`inactive-${m.id}`} motor={m} hasData={hasStateData} inactive />
                       ))}
                     </tbody>
                   </table>
@@ -1606,25 +1683,106 @@ function App() {
                           </div>
                         </td>
                       </tr>
-                      {controlMotors.map((m) => {
-                        const powered = hasStateData ? (m.enabled ?? false) : false;
-                        return (
-                          <MotorCommandRow
-                            key={m.id}
-                            motor={m}
-                            hasData={hasStateData}
-                            canControl={canControl}
-                            cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
-                            onChange={handleMotorCommandChange}
-                            onSync={handleMotorSyncById}
-                            onSend={handleMotorSendById}
-                            powered={powered}
-                            onTogglePower={handleMotorTogglePowerById}
-                            selected={selectedMotorIds.has(m.id)}
-                            onToggleSelect={handleToggleSelectMotor}
-                          />
-                        );
-                      })}
+                      {/* 활성 섹션 */}
+                      {showJointView
+                        ? controlMotors.map((m) => {
+                            const powered = hasStateData ? (m.enabled ?? false) : false;
+                            return (
+                              <MotorCommandRow
+                                key={m.id}
+                                motor={m}
+                                hasData={hasStateData}
+                                canControl={canControl}
+                                cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
+                                onChange={handleMotorCommandChange}
+                                onSync={handleMotorSyncById}
+                                onSend={handleMotorSendById}
+                                powered={powered}
+                                onTogglePower={handleMotorTogglePowerById}
+                                selected={selectedMotorIds.has(m.id)}
+                                onToggleSelect={handleToggleSelectMotor}
+                              />
+                            );
+                          })
+                        : PHYS_MOTOR_INFO.map((info) => {
+                            const physMotor = displayPhysMotors.find((pm) => pm.id === info.id) ?? {
+                              id: info.id, name: info.name, mode: "N/A",
+                              position: 0, velocity: 0, torque: 0, temperature: 0,
+                              error: false, warning: false, enabled: false,
+                            };
+                            const jointMotor = displayMotors[info.jointIdx];
+                            const powered = hasStateData ? (jointMotor?.enabled ?? false) : false;
+                            return (
+                              <MotorCommandRow
+                                key={info.id}
+                                motor={physMotor}
+                                hasData={hasStateData}
+                                canControl={canControl}
+                                cmd={motorCommands[info.jointIdx] ?? EMPTY_MOTOR_COMMAND}
+                                onChange={(_, next) => handleMotorCommandChange(info.jointIdx, next)}
+                                onSync={() => handlePhysMotorSyncById(info.id)}
+                                onSend={() => handleMotorSendById(info.jointIdx)}
+                                powered={powered}
+                                onTogglePower={() => handleMotorTogglePowerById(info.jointIdx)}
+                                selected={selectedMotorIds.has(info.jointIdx)}
+                                onToggleSelect={() => handleToggleSelectMotor(info.jointIdx)}
+                              />
+                            );
+                          })
+                      }
+                      {/* 비활성 섹션 구분선 */}
+                      <tr className="view-section-divider">
+                        <td colSpan={9}>
+                          <span>{showJointView ? "▾ 물리 모터 (비활성)" : "▾ 가상 조인트 (비활성)"}</span>
+                        </td>
+                      </tr>
+                      {/* 비활성 섹션 */}
+                      {showJointView
+                        ? PHYS_MOTOR_INFO.map((info) => {
+                            const physMotor = displayPhysMotors.find((pm) => pm.id === info.id) ?? {
+                              id: info.id, name: info.name, mode: "N/A",
+                              position: 0, velocity: 0, torque: 0, temperature: 0,
+                              error: false, warning: false, enabled: false,
+                            };
+                            return (
+                              <MotorCommandRow
+                                key={`inactive-${info.id}`}
+                                motor={physMotor}
+                                hasData={hasStateData}
+                                canControl={false}
+                                cmd={EMPTY_MOTOR_COMMAND}
+                                onChange={() => {}}
+                                onSync={() => {}}
+                                onSend={() => {}}
+                                powered={false}
+                                onTogglePower={() => {}}
+                                selected={false}
+                                onToggleSelect={() => {}}
+                                inactive
+                              />
+                            );
+                          })
+                        : controlMotors.map((m) => {
+                            const powered = hasStateData ? (m.enabled ?? false) : false;
+                            return (
+                              <MotorCommandRow
+                                key={`inactive-${m.id}`}
+                                motor={m}
+                                hasData={hasStateData}
+                                canControl={false}
+                                cmd={motorCommands[m.id] ?? EMPTY_MOTOR_COMMAND}
+                                onChange={() => {}}
+                                onSync={() => {}}
+                                onSend={() => {}}
+                                powered={powered}
+                                onTogglePower={() => {}}
+                                selected={false}
+                                onToggleSelect={() => {}}
+                                inactive
+                              />
+                            );
+                          })
+                      }
                     </tbody>
                   </table>
                 </div>

@@ -1,2 +1,0 @@
-/usr/bin/ar qc librtfw-connect.a CMakeFiles/rtfw-connect.dir/src/shm_querier.cpp.o CMakeFiles/rtfw-connect.dir/src/shm_connector.cpp.o CMakeFiles/rtfw-connect.dir/src/shm_controller.cpp.o
-/usr/bin/ranlib librtfw-connect.a

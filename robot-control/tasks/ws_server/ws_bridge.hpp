@@ -88,6 +88,7 @@ struct BridgeState {
     } data_logger;
 
     std::vector<MotorSnapshot> motors;
+    std::vector<MotorSnapshot> physical_motors; // 7개 물리 모터 raw 상태
     ImuSnapshot imu;
     std::unordered_map<std::string, double> joint_states;
 };
@@ -139,6 +140,7 @@ inline void to_json(json& j, const BridgeState& s) {
             {"filename",     s.data_logger.filename}
         }},
         {"motors", s.motors},
+        {"physical_motors", s.physical_motors},
         {"imu", s.imu},
         {"joint_states", s.joint_states}
     };

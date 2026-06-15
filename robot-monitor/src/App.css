@@ -359,6 +359,26 @@ body {
 
 /* 상태 row 색 */
 
+.row-inactive {
+  opacity: 0.38;
+  pointer-events: none;
+  background-color: #f8f9fa;
+}
+
+.view-section-divider td {
+  padding: 3px 8px;
+  background-color: #f1f5f9;
+  border-top: 1px solid #cbd5e1;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.view-section-divider span {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
 .row-error {
   background-color: #fee2e2;
 }

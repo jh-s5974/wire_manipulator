@@ -1,3 +1,0 @@
-repository='https://github.com/uNetworking/uSockets'
-module=''
-tag='origin'

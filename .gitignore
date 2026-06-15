@@ -1,0 +1,16 @@
+# CMake build artifacts
+robot-control/build/
+
+# Log files
+robot-control/logs/
+
+# VSCode database files
+.vscode/browse.vc.db
+.vscode/browse.vc.db-shm
+.vscode/browse.vc.db-wal
+
+# Claude Code
+.claude/
+
+# macOS
+.DS_Store

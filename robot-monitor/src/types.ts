@@ -76,6 +76,7 @@ export interface StatePayload {
   safety?: SafetyState;
   data_logger?: DataLoggerState;
   motors: MotorState[];
+  physical_motors?: MotorState[]; // 7개 물리 모터 raw 상태 (GUI 모터 뷰용)
   imu: ImuState;
   // 로봇에서 직접 보내는 조인트 상태 (URDF 조인트명: 라디안)
   joint_states?: { [jointName: string]: number };

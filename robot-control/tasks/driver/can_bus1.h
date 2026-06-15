@@ -128,6 +128,13 @@ public:
                         com_wdt[mi] = getExecutionLocalTick();
                         // 해당 물리 모터의 조인트가 아직 동기화 안 된 경우 처리
                         try_sync_joint(motor_joint(mi));
+                        // 물리 모터 raw 상태 publish (GUI 모터 뷰용)
+                        custom_types::MotorState phys_st{};
+                        phys_st.pos     = motors[mi]->state.pos;
+                        phys_st.vel     = motors[mi]->state.vel;
+                        phys_st.torque  = motors[mi]->state.torque;
+                        phys_st.enabled = joint_on[motor_joint(mi)];
+                        dw_phys_state_[mi].write(phys_st);
                         break;
                     }
                 }
@@ -237,8 +244,12 @@ private:
     double compute_joint_fk(int ji) const {
         switch (ji) {
             case 0: return kin_manip::joint2_motor_to_joint(motors[0]->state.pos);
-            case 1: return kin_manip::joint3_motors_to_joint(motors[1]->state.pos, motors[2]->state.pos);
-            case 2: return kin_manip::joint4_motors_to_joint(motors[3]->state.pos, motors[4]->state.pos);
+            case 1: // motor B (0x05, motors[2]) 기준, lower_link 커플링 보정
+                return kin_manip::joint3_motor_to_joint(motors[2]->state.pos, motors[0]->state.pos);
+            case 2: { // 방향별 active 모터 기준, lower_link 커플링 보정
+                double active = joint4_dir_extend_ ? motors[4]->state.pos : motors[3]->state.pos;
+                return kin_manip::joint4_motor_to_joint(active, motors[0]->state.pos);
+            }
             default: return 0.0;
         }
     }
@@ -246,8 +257,11 @@ private:
     double compute_joint_vel_fk(int ji) const {
         switch (ji) {
             case 0: return kin_manip::joint2_vel_motor_to_joint(motors[0]->state.vel);
-            case 1: return kin_manip::joint3_vel_motors_to_joint(motors[1]->state.vel, motors[2]->state.vel);
-            case 2: return kin_manip::joint4_vel_motors_to_joint(motors[3]->state.vel, motors[4]->state.vel);
+            case 1: return kin_manip::joint3_vel_motor_to_joint(motors[2]->state.vel);
+            case 2: {
+                double active_vel = joint4_dir_extend_ ? motors[4]->state.vel : motors[3]->state.vel;
+                return kin_manip::joint4_vel_motor_to_joint(active_vel);
+            }
             default: return 0.0;
         }
     }
@@ -255,8 +269,11 @@ private:
     double compute_joint_torque_fk(int ji) const {
         switch (ji) {
             case 0: return kin_manip::joint2_torque_motor_to_joint(motors[0]->state.torque);
-            case 1: return kin_manip::joint3_torque_motors_to_joint(motors[1]->state.torque, motors[2]->state.torque);
-            case 2: return kin_manip::joint4_torque_motors_to_joint(motors[3]->state.torque, motors[4]->state.torque);
+            case 1: return motors[2]->state.torque * kin_manip::ELBOW_RATIO;
+            case 2: {
+                double active_tau = joint4_dir_extend_ ? motors[4]->state.torque : motors[3]->state.torque;
+                return active_tau * kin_manip::UPPER_RATIO;
+            }
             default: return 0.0;
         }
     }
@@ -327,36 +344,68 @@ private:
     void apply_ik_and_send(int ji) {
         const auto& cmd = joint_cmds[ji];
         switch (ji) {
-            case 0: { // joint2: 볼스크류 1:1 IK
+            case 0: { // joint2: 볼스크류 IK
                 MotorCommand mc{};
                 mc.pos    = kin_manip::joint2_joint_to_motor(cmd.pos);
                 mc.vel    = kin_manip::joint2_vel_joint_to_motor(cmd.vel);
                 mc.torque = kin_manip::joint2_force_joint_to_motor(cmd.torque);
-                mc.kp = cmd.kp;
-                mc.kd = cmd.kd;
+                mc.kp     = cmd.kp;
+                mc.kd     = cmd.kd;
                 motors[0]->Control(so, mc);
                 break;
             }
-            case 1: { // joint3: 팔꿈치 와이어 2모터 IK
-                auto [pa, pb] = kin_manip::joint3_joint_to_motors(cmd.pos);
-                auto [va, vb] = kin_manip::joint3_vel_joint_to_motors(cmd.vel);
-                auto [ta, tb] = kin_manip::joint3_torque_joint_to_motors(cmd.torque);
-                MotorCommand mca{}, mcb{};
-                mca.pos = pa; mca.vel = va; mca.torque = ta; mca.kp = cmd.kp; mca.kd = cmd.kd;
-                mcb.pos = pb; mcb.vel = vb; mcb.torque = tb; mcb.kp = cmd.kp; mcb.kd = cmd.kd;
-                motors[1]->Control(so, mca);
-                motors[2]->Control(so, mcb);
+            case 1: { // joint3: 팔꿈치 와이어 IK
+                // motor A (0x04, motors[1]): 항상 장력 제어 — kp=kd=0, torque=tension
+                // motor B (0x05, motors[2]): 항상 위치 제어 — lower_link 커플링 보정 포함
+                double motor2_pos = motors[0]->state.pos;
+
+                MotorCommand mc_b{};
+                mc_b.pos    = kin_manip::joint3_joint_to_motor_pos(cmd.pos, motor2_pos);
+                mc_b.vel    = kin_manip::joint3_vel_joint_to_motor(cmd.vel);
+                mc_b.torque = cmd.torque / kin_manip::ELBOW_RATIO;
+                mc_b.kp     = cmd.kp;
+                mc_b.kd     = cmd.kd;
+
+                MotorCommand mc_a{};
+                mc_a.pos    = motors[1]->state.pos;
+                mc_a.vel    = 0.0;
+                mc_a.torque = kin_manip::ELBOW_TENSION_TORQUE;
+                mc_a.kp     = 0.0;
+                mc_a.kd     = 0.0;
+
+                motors[1]->Control(so, mc_a);
+                motors[2]->Control(so, mc_b);
                 break;
             }
-            case 2: { // joint4: 상단링크 와이어 2모터 IK
-                auto [pa, pb] = kin_manip::joint4_joint_to_motors(cmd.pos);
-                auto [va, vb] = kin_manip::joint4_vel_joint_to_motors(cmd.vel);
-                auto [fa, fb] = kin_manip::joint4_force_joint_to_motors(cmd.torque);
-                MotorCommand mca{}, mcb{};
-                mca.pos = pa; mca.vel = va; mca.torque = fa; mca.kp = cmd.kp; mca.kd = cmd.kd;
-                mcb.pos = pb; mcb.vel = vb; mcb.torque = fb; mcb.kp = cmd.kp; mcb.kd = cmd.kd;
-                motors[3]->Control(so, mca);
-                motors[4]->Control(so, mcb);
+            case 2: { // joint4: 상단링크 와이어 IK — 방향별 모터 전환
+                // extending (q4↑): motor B (0x07, motors[4]) 위치, motor A (0x06, motors[3]) 장력
+                // retracting (q4↓): motor A (0x06, motors[3]) 위치, motor B (0x07, motors[4]) 장력
+                bool extending = (cmd.pos >= joint_fb_pos_[2]);
+                joint4_dir_extend_ = extending;
+
+                double motor2_pos = motors[0]->state.pos;
+
+                MotorCommand mc_active{};
+                mc_active.pos    = kin_manip::joint4_joint_to_motor_pos(cmd.pos, motor2_pos);
+                mc_active.vel    = kin_manip::joint4_vel_joint_to_motor(cmd.vel);
+                mc_active.torque = cmd.torque / kin_manip::UPPER_RATIO;
+                mc_active.kp     = cmd.kp;
+                mc_active.kd     = cmd.kd;
+
+                MotorCommand mc_tension{};
+                mc_tension.pos    = extending ? motors[3]->state.pos : motors[4]->state.pos;
+                mc_tension.vel    = 0.0;
+                mc_tension.torque = kin_manip::UPPER_TENSION_TORQUE;
+                mc_tension.kp     = 0.0;
+                mc_tension.kd     = 0.0;
+
+                if (extending) {
+                    motors[3]->Control(so, mc_tension);
+                    motors[4]->Control(so, mc_active);
+                } else {
+                    motors[3]->Control(so, mc_active);
+                    motors[4]->Control(so, mc_tension);
+                }
                 break;
             }
         }
@@ -364,6 +413,15 @@ private:
 
     // ── 데이터 채널 ──
     DataWriter<bool> dw_state{"can1_state", ArchiveOption::Enable};
+
+    // 물리 모터 raw 상태 (GUI 모터 뷰용) — motors[0..4] = m03..m07
+    DataWriter<custom_types::MotorState> dw_phys_state_[NM] = {
+        DataWriter<custom_types::MotorState>{"phys_motor/m03/state"},
+        DataWriter<custom_types::MotorState>{"phys_motor/m04/state"},
+        DataWriter<custom_types::MotorState>{"phys_motor/m05/state"},
+        DataWriter<custom_types::MotorState>{"phys_motor/m06/state"},
+        DataWriter<custom_types::MotorState>{"phys_motor/m07/state"},
+    };
 
     DataWriter<custom_types::MotorState> dw_joint_state[NJ] = {
         DataWriter<custom_types::MotorState>{"joint2/state", ArchiveOption::Enable},
@@ -411,6 +469,7 @@ private:
     std::array<double, NJ>         joint_fb_pos_{};
     bool   joint_on[NJ]    = {};
     bool   motor_sync_[NM] = {};
+    bool   joint4_dir_extend_ = true;  // true: extending (motor B active), false: retracting (motor A active)
     int    cmd_wdt[NJ]     = {};
     int    com_wdt[NM]     = {};
     int    can_wdt         = 0;

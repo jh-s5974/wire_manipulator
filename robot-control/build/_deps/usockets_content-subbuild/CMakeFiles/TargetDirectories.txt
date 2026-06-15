@@ -1,3 +1,0 @@
-/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/usockets_content-populate.dir
-/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/edit_cache.dir
-/home/jh/wire_manipulator/robot-control/build/_deps/usockets_content-subbuild/CMakeFiles/rebuild_cache.dir
