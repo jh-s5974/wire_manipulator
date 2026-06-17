@@ -12,6 +12,12 @@
 //   - 상단링크 비율: 74.48         [deg_motor / deg_joint]
 //   - lower_link 커플링 (팔꿈치): -4.0 / 90  [motor_B_rad / motor_03_rad]
 //   - lower_link 커플링 (상단링크): -5.8 / 90 [motor_rad   / motor_03_rad]
+//
+//
+// 모터 회전 방향(실제 배선/장착에 따른 부호)은 여기서 다루지 않는다.
+// config/robotnl.yaml 의 motor_direction_sign 으로 물리 모터별로 보정하며,
+// can_bus0.h/can_bus1.h 에서 모터 상태를 읽고 명령을 보내는 시점에 적용된다.
+// 이 파일의 함수들은 모두 "보정된(=Arduino 기준과 동일한 방향) 모터 값"을 다룬다.
 
 namespace kin_manip {
 
@@ -82,6 +88,10 @@ inline double joint3_joint_to_motor_pos(double q3_rad, double motor2_rad) {
 inline double joint3_vel_joint_to_motor(double joint_vel) { return joint_vel * ELBOW_RATIO; }
 inline double joint3_vel_motor_to_joint(double motor_vel) { return motor_vel / ELBOW_RATIO; }
 
+// 토크 변환 (motor B 기준)
+inline double joint3_torque_joint_to_motor(double joint_Nm) { return joint_Nm / ELBOW_RATIO; }
+inline double joint3_torque_motor_to_joint(double motor_Nm) { return motor_Nm * ELBOW_RATIO; }
+
 // ═══════════════════════════════════════════════════════════════════
 // Joint 4: upper_link — 와이어 구동, motors 0x06(A) + 0x07(B)
 //
@@ -111,10 +121,14 @@ inline double joint4_motor_to_joint(double motor_active_rad, double motor2_rad) 
 // motor2_rad : motors[0] (0x03) 현재 위치 (커플링 보정용)
 inline double joint4_joint_to_motor_pos(double q4_rad, double motor2_rad) {
     return q4_rad * UPPER_RATIO + UPPER_LOWER_COUPLING * motor2_rad;
-} 
+}
 
 // 속도 변환
 inline double joint4_vel_joint_to_motor(double joint_vel) { return joint_vel * UPPER_RATIO; }
 inline double joint4_vel_motor_to_joint(double motor_vel) { return motor_vel / UPPER_RATIO; }
+
+// 토크 변환 (active 모터 기준)
+inline double joint4_torque_joint_to_motor(double joint_Nm) { return joint_Nm / UPPER_RATIO; }
+inline double joint4_torque_motor_to_joint(double motor_Nm) { return motor_Nm * UPPER_RATIO; }
 
 } // namespace kin_manip

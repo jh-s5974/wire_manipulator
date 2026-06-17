@@ -1,0 +1,51 @@
+manipulator_motor_controller:
+  # Publish all joint states -----------------------------------
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50
+
+  # Position Controllers --------------------------------------
+  회전 1_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 1
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 2_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 2
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  슬라이더 3_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 슬라이더 3
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 4_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 4
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 5_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 5
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 6_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 6
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  슬라이더 7_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 슬라이더 7
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 8_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 8
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 9_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 9
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 10_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 10
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  회전 11_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: 회전 11
+    pid: {p: 100.0, i: 0.01, d: 10.0}

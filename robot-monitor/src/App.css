@@ -342,6 +342,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.cell-io {
+  display: table-cell;
+  vertical-align: middle;
+  line-height: 1.2;
+  font-size: 11px;
+}
+
+.cell-io-hz {
+  display: block;
+  font-size: 9px;
+  color: #64748b;
+  font-weight: 500;
+}
+
 /* Status table: Pos/Vel/Torque 헤더는 cmd(left)/now(right) 분할 셀에 맞춰 center */
 .head-pair {
   text-align: center;

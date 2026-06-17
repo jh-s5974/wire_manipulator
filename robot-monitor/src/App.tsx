@@ -64,10 +64,10 @@ type JointLimits = {
 const JOINT_LIMITS: Record<string, JointLimits> = {
   //          pos lower     pos upper   effort  vel   kp   kd  dur  unit       type
   joint0: { lower: -2.094395, upper:  2.094395, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
-  joint1: { lower: -0.523599, upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
-  joint2: { lower: -0.09,     upper:  0.0,      effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
-  joint3: { lower: -1.570796, upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
-  joint4: { lower: -0.095,    upper:  0.0,      effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
+  joint1: { lower:  0.0,      upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
+  joint2: { lower:  0.0,      upper:  0.09,     effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
+  joint3: { lower:  0.0,      upper:  1.570796, effortMax: 100, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "rad", type: "revolute"  },
+  joint4: { lower:  0.0,      upper:  0.09,     effortMax: 500, velMax: 30, kpMax: 600, kdMax: 5, durationMax: 10, unit: "m",   type: "prismatic" },
 };
 
 const MOTOR_NAMES: string[] = ["joint0", "joint1", "joint2", "joint3", "joint4"];
@@ -401,9 +401,10 @@ interface MotorStatusRowProps {
   motor: MotorState;
   hasData: boolean;
   inactive?: boolean;
+  showIo?: boolean; // 물리 모터 행일 때만 CAN tx/rx 통계 표시
 }
 
-const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inactive }: MotorStatusRowProps) {
+const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inactive, showIo }: MotorStatusRowProps) {
   const limits = motor.name ? JOINT_LIMITS[motor.name] : undefined;
   const renderNum = (v: number | undefined, d = 3) =>
     hasData && typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "N/A";
@@ -466,6 +467,16 @@ const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inac
       <td className="num">{renderNum(currentKp, 1)}</td>
       <td className="num">{renderNum(currentKd, 1)}</td>
       <td className="num">{hasData ? `${motor.temperature.toFixed(1)}°C` : "N/A"}</td>
+      <td className="num cell-io">
+        {showIo && hasData && typeof motor.tx_count === "number"
+          ? <>{motor.tx_count}<span className="cell-io-hz">{motor.tx_hz?.toFixed(0) ?? 0}Hz</span></>
+          : "-"}
+      </td>
+      <td className="num cell-io">
+        {showIo && hasData && typeof motor.rx_count === "number"
+          ? <>{motor.rx_count}<span className="cell-io-hz">{motor.rx_hz?.toFixed(0) ?? 0}Hz</span></>
+          : "-"}
+      </td>
     </tr>
   );
 });
@@ -1573,6 +1584,8 @@ function App() {
                       <col style={{ width: "36px" }} />
                       <col style={{ width: "36px" }} />
                       <col style={{ width: "46px" }} />
+                      <col style={{ width: "60px" }} />
+                      <col style={{ width: "60px" }} />
                     </colgroup>
                     <thead>
                       <tr>
@@ -1585,23 +1598,25 @@ function App() {
                         <th className="num">Kp</th>
                         <th className="num">Kd</th>
                         <th className="num">Temp</th>
+                        <th className="num" title="CAN 송신 횟수 / Hz">TX</th>
+                        <th className="num" title="CAN 수신 횟수 / Hz">RX</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="bulk-spacer-row"><td colSpan={9} /></tr>
+                      <tr className="bulk-spacer-row"><td colSpan={11} /></tr>
                       {/* 활성 섹션 */}
                       {(showJointView ? displayMotors : displayPhysMotors).map((m) => (
-                        <MotorStatusRow key={m.id} motor={m} hasData={hasStateData} />
+                        <MotorStatusRow key={m.id} motor={m} hasData={hasStateData} showIo={!showJointView} />
                       ))}
                       {/* 비활성 섹션 구분선 */}
                       <tr className="view-section-divider">
-                        <td colSpan={9}>
+                        <td colSpan={11}>
                           <span>{showJointView ? "▾ 물리 모터 (비활성)" : "▾ 가상 조인트 (비활성)"}</span>
                         </td>
                       </tr>
                       {/* 비활성 섹션 — 연한 회색 */}
                       {(showJointView ? displayPhysMotors : displayMotors).map((m) => (
-                        <MotorStatusRow key={`inactive-${m.id}`} motor={m} hasData={hasStateData} inactive />
+                        <MotorStatusRow key={`inactive-${m.id}`} motor={m} hasData={hasStateData} inactive showIo={showJointView} />
                       ))}
                     </tbody>
                   </table>

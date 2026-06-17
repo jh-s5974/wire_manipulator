@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 namespace custom_types {
     struct Imu {
@@ -30,6 +31,14 @@ namespace custom_types {
         double temp;
         int status;
         bool enabled = false;
+    };
+
+    // CAN tx/rx 통계 (GUI 모터 뷰 진단용)
+    struct MotorIoStats {
+        uint32_t tx_count = 0;
+        uint32_t rx_count = 0;
+        double   tx_hz = 0.0;
+        double   rx_hz = 0.0;
     };
 
     struct MotorCmd {

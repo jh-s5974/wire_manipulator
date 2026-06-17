@@ -28,6 +28,12 @@ export interface MotorState {
 
   // 전원/enable 상태 (로봇에서 보내주면 사용, 안 보내면 UI에서 false로 취급)
   enabled?: boolean;
+
+  // CAN tx/rx 통계 (물리 모터 진단용 — 데이터 밀림/주기 확인)
+  tx_count?: number;
+  rx_count?: number;
+  tx_hz?: number;
+  rx_hz?: number;
 }
 
 export interface ImuOrientationRpy {

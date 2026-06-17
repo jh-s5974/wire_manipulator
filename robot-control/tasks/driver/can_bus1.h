@@ -11,6 +11,11 @@
 //
 // 가상 조인트 인덱스 (this file 내부):
 //   ji=0 → joint2,  ji=1 → joint3,  ji=2 → joint4
+//
+// 모터 회전 방향 보정: config/robotnl.yaml 의 motor_direction_sign[2..6]
+// (m03~m07) 을 실제 배선/장착에 맞춰 +1/-1 로 설정. mpos()/mvel()/mtorque()로
+// 모터 상태를 읽고, send_motor_cmd()로 명령을 보낼 때 일괄 적용되며,
+// 그 외 모든 코드(kin_manipulator.hpp 포함)는 보정된 값을 "정방향"으로 다룬다.
 
 #include <rtfw/task.h>
 #include "../util.hpp"
@@ -60,6 +65,11 @@ public:
         for (auto& p : joint_fb_pos_) p = 0.0;
         for (auto& c : joint_cmds)   c = {};
         for (auto& i : cmd_interp)   i = {};
+
+        // motor_direction_sign 7개 중 m03~m07 (index 2~6) 사용
+        const auto& sign = p_motor_sign.read();
+        for (int mi = 0; mi < NM; mi++)
+            motor_sign_[mi] = ((int)sign.size() > mi + 2) ? sign[mi + 2] : 1.0;
     }
 
     void execute(void*) override {
@@ -126,13 +136,14 @@ public:
                 for (int mi = 0; mi < NM; mi++) {
                     if (motors[mi]->isMyFrame(&rx) && motors[mi]->parseFeedback(&rx)) {
                         com_wdt[mi] = getExecutionLocalTick();
+                        rx_count_[mi]++;
                         // 해당 물리 모터의 조인트가 아직 동기화 안 된 경우 처리
                         try_sync_joint(motor_joint(mi));
-                        // 물리 모터 raw 상태 publish (GUI 모터 뷰용)
+                        // 물리 모터 상태 publish (GUI 모터 뷰용, 방향 보정 적용됨)
                         custom_types::MotorState phys_st{};
-                        phys_st.pos     = motors[mi]->state.pos;
-                        phys_st.vel     = motors[mi]->state.vel;
-                        phys_st.torque  = motors[mi]->state.torque;
+                        phys_st.pos     = mpos(mi);
+                        phys_st.vel     = mvel(mi);
+                        phys_st.torque  = mtorque(mi);
                         phys_st.enabled = joint_on[motor_joint(mi)];
                         dw_phys_state_[mi].write(phys_st);
                         break;
@@ -174,6 +185,8 @@ public:
             // IK → 물리 모터 명령 송신
             send_motor_commands(tick, offline);
 
+            update_io_stats();
+
             PERIODIC_CALL(
                 for (int mi = 0; mi < NM; mi++) {
                     if (!motors[mi]->state.online)
@@ -210,6 +223,7 @@ public:
             for (auto& m : motors) m->Stop(so);
             can_close();
         }
+        can_ifdown_if_ours();
     }
 
 private:
@@ -239,16 +253,21 @@ private:
         return true;
     }
 
+    // 모터 배선/장착 방향 보정 (motor_direction_sign) 적용된 모터 상태 접근자
+    double mpos(int mi)    const { return motor_sign_[mi] * motors[mi]->state.pos; }
+    double mvel(int mi)    const { return motor_sign_[mi] * motors[mi]->state.vel; }
+    double mtorque(int mi) const { return motor_sign_[mi] * motors[mi]->state.torque; }
+
     // ── 피드백 FK ──
 
     double compute_joint_fk(int ji) const {
         switch (ji) {
-            case 0: return kin_manip::joint2_motor_to_joint(motors[0]->state.pos);
+            case 0: return kin_manip::joint2_motor_to_joint(mpos(0));
             case 1: // motor B (0x05, motors[2]) 기준, lower_link 커플링 보정
-                return kin_manip::joint3_motor_to_joint(motors[2]->state.pos, motors[0]->state.pos);
+                return kin_manip::joint3_motor_to_joint(mpos(2), mpos(0));
             case 2: { // 방향별 active 모터 기준, lower_link 커플링 보정
-                double active = joint4_dir_extend_ ? motors[4]->state.pos : motors[3]->state.pos;
-                return kin_manip::joint4_motor_to_joint(active, motors[0]->state.pos);
+                double active = joint4_dir_extend_ ? mpos(4) : mpos(3);
+                return kin_manip::joint4_motor_to_joint(active, mpos(0));
             }
             default: return 0.0;
         }
@@ -256,10 +275,10 @@ private:
 
     double compute_joint_vel_fk(int ji) const {
         switch (ji) {
-            case 0: return kin_manip::joint2_vel_motor_to_joint(motors[0]->state.vel);
-            case 1: return kin_manip::joint3_vel_motor_to_joint(motors[2]->state.vel);
+            case 0: return kin_manip::joint2_vel_motor_to_joint(mvel(0));
+            case 1: return kin_manip::joint3_vel_motor_to_joint(mvel(2));
             case 2: {
-                double active_vel = joint4_dir_extend_ ? motors[4]->state.vel : motors[3]->state.vel;
+                double active_vel = joint4_dir_extend_ ? mvel(4) : mvel(3);
                 return kin_manip::joint4_vel_motor_to_joint(active_vel);
             }
             default: return 0.0;
@@ -268,11 +287,11 @@ private:
 
     double compute_joint_torque_fk(int ji) const {
         switch (ji) {
-            case 0: return kin_manip::joint2_torque_motor_to_joint(motors[0]->state.torque);
-            case 1: return motors[2]->state.torque * kin_manip::ELBOW_RATIO;
+            case 0: return kin_manip::joint2_torque_motor_to_joint(mtorque(0));
+            case 1: return kin_manip::joint3_torque_motor_to_joint(mtorque(2));
             case 2: {
-                double active_tau = joint4_dir_extend_ ? motors[4]->state.torque : motors[3]->state.torque;
-                return active_tau * kin_manip::UPPER_RATIO;
+                double active_tau = joint4_dir_extend_ ? mtorque(4) : mtorque(3);
+                return kin_manip::joint4_torque_motor_to_joint(active_tau);
             }
             default: return 0.0;
         }
@@ -285,7 +304,7 @@ private:
         for (int mi : joint_motors(ji)) {
             if (motors[mi]->state.online && !motor_sync_[mi]) {
                 motor_sync_[mi] = true;
-                getLogger()->info("[{}] Motor[{}] synced pos={:.3f}", getName(), mi, motors[mi]->state.pos);
+                getLogger()->info("[{}] Motor[{}] synced pos={:.3f}", getName(), mi, mpos(mi));
             }
         }
         // 이 조인트의 모든 모터가 동기화 완료됐을 때 초기 명령을 현재 위치로 설정
@@ -323,7 +342,7 @@ private:
             if (!ready) {
                 // 오프라인 or 준비 안 됨 → 영 명령
                 for (int mi : joint_motors(ji))
-                    motors[mi]->Control(so, MotorCommand{});
+                    send_motor_cmd(mi, MotorCommand{});
                 continue;
             }
 
@@ -351,30 +370,30 @@ private:
                 mc.torque = kin_manip::joint2_force_joint_to_motor(cmd.torque);
                 mc.kp     = cmd.kp;
                 mc.kd     = cmd.kd;
-                motors[0]->Control(so, mc);
+                send_motor_cmd(0, mc);
                 break;
             }
             case 1: { // joint3: 팔꿈치 와이어 IK
                 // motor A (0x04, motors[1]): 항상 장력 제어 — kp=kd=0, torque=tension
                 // motor B (0x05, motors[2]): 항상 위치 제어 — lower_link 커플링 보정 포함
-                double motor2_pos = motors[0]->state.pos;
+                double motor2_pos = mpos(0);
 
                 MotorCommand mc_b{};
                 mc_b.pos    = kin_manip::joint3_joint_to_motor_pos(cmd.pos, motor2_pos);
                 mc_b.vel    = kin_manip::joint3_vel_joint_to_motor(cmd.vel);
-                mc_b.torque = cmd.torque / kin_manip::ELBOW_RATIO;
+                mc_b.torque = kin_manip::joint3_torque_joint_to_motor(cmd.torque);
                 mc_b.kp     = cmd.kp;
                 mc_b.kd     = cmd.kd;
 
                 MotorCommand mc_a{};
-                mc_a.pos    = motors[1]->state.pos;
+                mc_a.pos    = mpos(1);
                 mc_a.vel    = 0.0;
                 mc_a.torque = kin_manip::ELBOW_TENSION_TORQUE;
                 mc_a.kp     = 0.0;
                 mc_a.kd     = 0.0;
 
-                motors[1]->Control(so, mc_a);
-                motors[2]->Control(so, mc_b);
+                send_motor_cmd(1, mc_a);
+                send_motor_cmd(2, mc_b);
                 break;
             }
             case 2: { // joint4: 상단링크 와이어 IK — 방향별 모터 전환
@@ -383,28 +402,28 @@ private:
                 bool extending = (cmd.pos >= joint_fb_pos_[2]);
                 joint4_dir_extend_ = extending;
 
-                double motor2_pos = motors[0]->state.pos;
+                double motor2_pos = mpos(0);
 
                 MotorCommand mc_active{};
                 mc_active.pos    = kin_manip::joint4_joint_to_motor_pos(cmd.pos, motor2_pos);
                 mc_active.vel    = kin_manip::joint4_vel_joint_to_motor(cmd.vel);
-                mc_active.torque = cmd.torque / kin_manip::UPPER_RATIO;
+                mc_active.torque = kin_manip::joint4_torque_joint_to_motor(cmd.torque);
                 mc_active.kp     = cmd.kp;
                 mc_active.kd     = cmd.kd;
 
                 MotorCommand mc_tension{};
-                mc_tension.pos    = extending ? motors[3]->state.pos : motors[4]->state.pos;
+                mc_tension.pos    = extending ? mpos(3) : mpos(4);
                 mc_tension.vel    = 0.0;
                 mc_tension.torque = kin_manip::UPPER_TENSION_TORQUE;
                 mc_tension.kp     = 0.0;
                 mc_tension.kd     = 0.0;
 
                 if (extending) {
-                    motors[3]->Control(so, mc_tension);
-                    motors[4]->Control(so, mc_active);
+                    send_motor_cmd(3, mc_tension);
+                    send_motor_cmd(4, mc_active);
                 } else {
-                    motors[3]->Control(so, mc_active);
-                    motors[4]->Control(so, mc_tension);
+                    send_motor_cmd(3, mc_active);
+                    send_motor_cmd(4, mc_tension);
                 }
                 break;
             }
@@ -421,6 +440,15 @@ private:
         DataWriter<custom_types::MotorState>{"phys_motor/m05/state"},
         DataWriter<custom_types::MotorState>{"phys_motor/m06/state"},
         DataWriter<custom_types::MotorState>{"phys_motor/m07/state"},
+    };
+
+    // 물리 모터 CAN tx/rx 통계 (GUI 모터 뷰 진단용)
+    DataWriter<custom_types::MotorIoStats> dw_phys_io_[NM] = {
+        DataWriter<custom_types::MotorIoStats>{"phys_motor/m03/io"},
+        DataWriter<custom_types::MotorIoStats>{"phys_motor/m04/io"},
+        DataWriter<custom_types::MotorIoStats>{"phys_motor/m05/io"},
+        DataWriter<custom_types::MotorIoStats>{"phys_motor/m06/io"},
+        DataWriter<custom_types::MotorIoStats>{"phys_motor/m07/io"},
     };
 
     DataWriter<custom_types::MotorState> dw_joint_state[NJ] = {
@@ -445,6 +473,8 @@ private:
     };
 
     Parameter<std::string> p_port{"can1.port", "can1"};
+    // 모터 방향 보정 (m03~m07) — 실제 배선/장착에 맞춰 +1/-1
+    Parameter<std::vector<double>> p_motor_sign{"motor_direction_sign"};
 
     // ── 모터 ──
     std::vector<std::shared_ptr<Motor>> motors = {
@@ -454,6 +484,8 @@ private:
         std::make_shared<MyActuatorX6>(0x06), // joint4: 와이어 A
         std::make_shared<MyActuatorX6>(0x07), // joint4: 와이어 B
     };
+
+    double motor_sign_[NM] = {1.0, 1.0, 1.0, 1.0, 1.0};
 
     // ── 내부 상태 ──
     struct MotorCmdInterp {
@@ -474,8 +506,51 @@ private:
     int    com_wdt[NM]     = {};
     int    can_wdt         = 0;
     int    so              = -1;
-    bool   link_initialized = false;
-    bool   restart_required = false;
+    bool   link_initialized   = false;
+    bool   restart_required   = false;
+    bool   link_brought_up_by_us_ = false; // 이 프로세스가 직접 'ip link up' 했는지
+    std::string opened_port_;
+
+    // ── CAN tx/rx 통계 (GUI 모터 뷰 진단용) ──
+    uint32_t tx_count_[NM]      = {};
+    uint32_t rx_count_[NM]      = {};
+    uint32_t tx_count_prev_[NM] = {};
+    uint32_t rx_count_prev_[NM] = {};
+    double   tx_hz_[NM]         = {};
+    double   rx_hz_[NM]         = {};
+    std::chrono::steady_clock::time_point io_window_start_ = std::chrono::steady_clock::now();
+
+    // cmd는 보정된(월드) 방향 기준 — 모터로 보내기 직전 motor_sign_ 으로 되돌림
+    void send_motor_cmd(int mi, const MotorCommand& cmd) {
+        MotorCommand raw = cmd;
+        raw.pos    *= motor_sign_[mi];
+        raw.vel    *= motor_sign_[mi];
+        raw.torque *= motor_sign_[mi];
+        motors[mi]->Control(so, raw);
+        tx_count_[mi]++;
+    }
+
+    void update_io_stats() {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - io_window_start_).count();
+        if (elapsed >= 1.0) {
+            for (int mi = 0; mi < NM; mi++) {
+                tx_hz_[mi] = (tx_count_[mi] - tx_count_prev_[mi]) / elapsed;
+                rx_hz_[mi] = (rx_count_[mi] - rx_count_prev_[mi]) / elapsed;
+                tx_count_prev_[mi] = tx_count_[mi];
+                rx_count_prev_[mi] = rx_count_[mi];
+            }
+            io_window_start_ = now;
+        }
+        for (int mi = 0; mi < NM; mi++) {
+            custom_types::MotorIoStats io{};
+            io.tx_count = tx_count_[mi];
+            io.rx_count = rx_count_[mi];
+            io.tx_hz    = tx_hz_[mi];
+            io.rx_hz    = rx_hz_[mi];
+            dw_phys_io_[mi].write(io);
+        }
+    }
 
     // ── CAN 유틸리티 (can_bus0.h와 동일 구조) ──
     bool run_ip_command(const char* port, const char* action, bool log_fail = true) {
@@ -532,11 +607,13 @@ private:
                 getLogger()->info("[{}] {} already up", getName(), port);
             } else {
                 if (!can_ifup(port)) return -1;
-                link_initialized = true;
+                link_initialized       = true;
+                link_brought_up_by_us_ = true;
             }
         } else if (restart_required) {
             run_ip_command(port, "restart", false);
         }
+        opened_port_ = port;
 
         int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
         if (s <= 0) { getLogger()->error("[{}] socket() failed on {}", getName(), port); return s; }
@@ -561,6 +638,15 @@ private:
         if (so > 0) { close(so); getLogger()->info("[{}] CAN closed", getName()); }
         so = -1;
         reset_can_state();
+    }
+
+    // 이 프로세스가 직접 활성화했던 인터페이스만 종료 시 비활성화
+    void can_ifdown_if_ours() {
+        if (link_brought_up_by_us_ && !opened_port_.empty()) {
+            run_ip_command(opened_port_.c_str(), "down", false);
+            getLogger()->info("[{}] {} down", getName(), opened_port_);
+            link_brought_up_by_us_ = false;
+        }
     }
 };
 

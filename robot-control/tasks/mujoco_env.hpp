@@ -114,6 +114,17 @@ public:
 
         ema_filter_.initialize(cutoff_freq_, physics_dt_, MJ_N);
         build_joint_mapping();
+
+        // 첫 GUI 명령이 오기 전까지도 default_joint_positions/joint_kp/joint_kd로
+        // 자세를 잡고 있도록 제어 변수를 미리 채움 (안 그러면 kp=kd=0인 채로
+        // 시작해 중력/결합 영향으로 처짐)
+        for (int i = 0; i < MJ_N; ++i) {
+            const int act_idx = actuator_indices_[i];
+            des_pos_[act_idx] = default_joint_positions_[i];
+            kp_vec_[act_idx]  = joint_kp_[i];
+            kd_vec_[act_idx]  = joint_kd_[i];
+        }
+
         reset_sim();
         start_viewer_thread();
 
@@ -225,6 +236,8 @@ private:
             joint_qvel_adr_[i]   = model_->jnt_dofadr[joint_id];
         }
         getLogger()->info("[{}] joint mapping built for {} joints", getName(), MJ_N);
+        for (int i = 0; i < MJ_N; ++i)
+            getLogger()->info("[DEBUG] joint {} ({}) -> actuator_idx={}", i, joint_names_[i], actuator_indices_[i]);
     }
 
     void reset_sim() {

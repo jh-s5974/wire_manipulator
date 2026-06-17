@@ -58,6 +58,12 @@ private:
     static constexpr const char* kPhysNames[kPhysCount] = {
         "m01","m02","m03","m04","m05","m06","m07"
     };
+    static constexpr const char* kPhysIoChannels[kPhysCount] = {
+        "phys_motor/m01/io", "phys_motor/m02/io",
+        "phys_motor/m03/io", "phys_motor/m04/io",
+        "phys_motor/m05/io", "phys_motor/m06/io",
+        "phys_motor/m07/io",
+    };
 
     struct JointIo {
         const char* name;
@@ -112,6 +118,17 @@ private:
         DataReader<custom_types::MotorState>{kPhysChannels[6], DependencyType::Weak},
     };
 
+    // ── 물리 모터 CAN tx/rx 통계 채널 (GUI 모터 뷰 진단용) ──
+    DataReader<custom_types::MotorIoStats> dr_phys_io_[kPhysCount] = {
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[0], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[1], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[2], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[3], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[4], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[5], DependencyType::Weak},
+        DataReader<custom_types::MotorIoStats>{kPhysIoChannels[6], DependencyType::Weak},
+    };
+
     // 공통 GUI 상태 채널
     DataReader<bool> dr_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
     DataReader<bool> dr_control_granted_  {"gui/motor/control_granted",   DependencyType::Weak};
@@ -135,6 +152,7 @@ private:
     // ── 캐시 ──
     std::array<custom_types::MotorState, kPhysCount>  phys_state_cache_{};
     std::array<bool,                     kPhysCount>  phys_online_{};
+    std::array<custom_types::MotorIoStats, kPhysCount> phys_io_cache_{};
     std::array<custom_types::MotorState, kJointCount> state_cache_{};
     std::array<custom_types::MotorCmd,   kJointCount> safety_cmd_cache_{};
     std::array<bool,                     kJointCount> safety_cmd_online_{};
@@ -158,6 +176,9 @@ private:
             dr_phys_state_[i].on_update([&, i](const custom_types::MotorState& d) {
                 phys_state_cache_[i] = d;
                 phys_online_[i]      = true;
+            });
+            dr_phys_io_[i].on_update([&, i](const custom_types::MotorIoStats& d) {
+                phys_io_cache_[i] = d;
             });
         }
         for (int i = 0; i < kJointCount; i++) {
@@ -238,6 +259,11 @@ private:
             psnap.velocity = ps.vel;
             psnap.torque   = ps.torque;
             psnap.enabled  = ps.enabled;
+            const auto& io = phys_io_cache_[i];
+            psnap.tx_count = io.tx_count;
+            psnap.rx_count = io.rx_count;
+            psnap.tx_hz    = io.tx_hz;
+            psnap.rx_hz    = io.rx_hz;
             st.physical_motors.push_back(std::move(psnap));
         }
 

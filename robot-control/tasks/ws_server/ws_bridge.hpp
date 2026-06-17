@@ -52,6 +52,12 @@ struct MotorSnapshot {
     double kd;
 
     bool enabled;
+
+    // CAN tx/rx 통계 (물리 모터 진단용, 가상 조인트는 0)
+    uint32_t tx_count = 0;
+    uint32_t rx_count = 0;
+    double   tx_hz = 0.0;
+    double   rx_hz = 0.0;
 };
 
 struct Vec3 {
@@ -117,7 +123,11 @@ inline void to_json(json& j, const MotorSnapshot& m) {
         {"driver_command_kd", m.driver_command_kd},
         {"kp", m.kp},
         {"kd", m.kd},
-        {"enabled", m.enabled}
+        {"enabled", m.enabled},
+        {"tx_count", m.tx_count},
+        {"rx_count", m.rx_count},
+        {"tx_hz", m.tx_hz},
+        {"rx_hz", m.rx_hz}
     };
 }
 
