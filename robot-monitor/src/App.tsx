@@ -72,6 +72,17 @@ const JOINT_LIMITS: Record<string, JointLimits> = {
 
 const MOTOR_NAMES: string[] = ["joint0", "joint1", "joint2", "joint3", "joint4"];
 
+// config/robotnl.yaml joint_kp/joint_kd 기본값 — Sync 시 입력칸을 채우는 용도.
+// On 직후엔 실제로 kp=0(무력)이 적용되지만, Sync는 사용자가 바로 Send할 수 있도록
+// 이 기본 게인을 보여준다.
+const DEFAULT_JOINT_GAINS: { kp: number; kd: number }[] = [
+  { kp: 100.0, kd: 3.0 }, // joint0: base_yaw
+  { kp: 100.0, kd: 3.0 }, // joint1: pitch
+  { kp: 200.0, kd: 4.0 }, // joint2: lower_link (ball screw)
+  { kp: 80.0, kd: 2.5 },  // joint3: elbow_pitch (wire)
+  { kp: 80.0, kd: 2.5 },  // joint4: upper_link (wire)
+];
+
 // 물리 모터 7개 정보 (id: 1-based, jointIdx: 가상 조인트 인덱스)
 const PHYS_MOTOR_INFO = [
   { id: 1, name: "m01", label: "base_yaw",       jointIdx: 0 },
@@ -568,45 +579,45 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           className="cmd-input cmd-input-full"
           value={cmd.position}
           onChange={handleFieldChange("position")}
-          disabled={!powered || !canControl}
+          disabled={!canControl}
         />
-        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !powered || !canControl, 2)}
+        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
           className="cmd-input cmd-input-full"
           value={cmd.velocity}
           onChange={handleFieldChange("velocity")}
-          disabled={!powered || !canControl}
+          disabled={!canControl}
         />
-        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !powered || !canControl, 2)}
+        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
           className="cmd-input cmd-input-full"
           value={cmd.torque}
           onChange={handleFieldChange("torque")}
-          disabled={!powered || !canControl}
+          disabled={!canControl}
         />
-        {limits && renderCmdBar("torque", cmd.torque, -limits.effortMax, limits.effortMax, "#f59e0b", !powered || !canControl, 2)}
+        {limits && renderCmdBar("torque", cmd.torque, -limits.effortMax, limits.effortMax, "#f59e0b", !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
           className="cmd-input cmd-input-full"
           value={cmd.kp}
           onChange={handleFieldChange("kp")}
-          disabled={!powered || !canControl}
+          disabled={!canControl}
         />
-        {limits && renderCmdBar("kp", cmd.kp, 0, limits.kpMax, "#10b981", !powered || !canControl, 1)}
+        {limits && renderCmdBar("kp", cmd.kp, 0, limits.kpMax, "#10b981", !canControl, 1)}
       </td>
       <td className="stat-cell">
         <input
           className="cmd-input cmd-input-full"
           value={cmd.kd}
           onChange={handleFieldChange("kd")}
-          disabled={!powered || !canControl}
+          disabled={!canControl}
         />
-        {limits && renderCmdBar("kd", cmd.kd, 0, limits.kdMax, "#10b981", !powered || !canControl, 1)}
+        {limits && renderCmdBar("kd", cmd.kd, 0, limits.kdMax, "#10b981", !canControl, 1)}
       </td>
       <td className="stat-cell">
         <input
@@ -658,6 +669,9 @@ function App() {
     authRetryAt,
     sendMotorPower,
     sendMotorCommand,
+    sendPhysMotorPower,
+    sendPhysMotorCommand,
+    sendViewMode,
     sendMotorControlRequest,
     sendSafetyReset,
     sendDataLogger,
@@ -692,8 +706,15 @@ function App() {
     Record<number, MotorCommandFields>
   >({});
 
+  // 물리 모터(m01~m07) 직접 명령 상태 — 모터 뷰(모터 명령 모드)에서 사용, joint IK 우회
+  const [physMotorCommands, setPhysMotorCommands] = React.useState<
+    Record<number, MotorCommandFields>
+  >({});
+
   // 일괄 입력 상태
   const [selectedMotorIds, setSelectedMotorIds] = React.useState<Set<number>>(new Set());
+  // 물리 모터(m01~m07) 일괄 선택 — 모터 뷰용 (조인트와 별도 id 공간)
+  const [selectedPhysMotorIds, setSelectedPhysMotorIds] = React.useState<Set<number>>(new Set());
   const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
   const [showJointView, setShowJointView] = React.useState(true); // true = 조인트 뷰(ON), false = 모터 뷰(OFF)
   const [showPlot, setShowPlot] = React.useState(false);
@@ -918,25 +939,18 @@ function App() {
       if (!state) return;
       const motor = state.motors.find((m) => m.id === motorId);
       if (!motor) return;
+      const gains = DEFAULT_JOINT_GAINS[motor.id];
       setMotorCommands((prev) => ({
         ...prev,
         [motor.id]: {
           ...(prev[motor.id] ?? makeInitialCommand(motor)),
-          position: formatCommandValue(motor.command_position ?? motor.position, "position", prev[motor.id]?.position ?? "0.00"),
-          velocity: formatCommandValue(motor.command_velocity ?? motor.velocity, "velocity", prev[motor.id]?.velocity ?? "0.00"),
-          torque: formatCommandValue(motor.command_torque ?? motor.torque, "torque", prev[motor.id]?.torque ?? "0.00"),
-          kp:
-            motor.command_kp !== undefined
-              ? formatCommandValue(motor.command_kp, "kp", prev[motor.id]?.kp ?? "0.0")
-              : motor.kp !== undefined
-                ? formatCommandValue(motor.kp, "kp", prev[motor.id]?.kp ?? "0.0")
-                : (prev[motor.id]?.kp ?? "0.0"),
-          kd:
-            motor.command_kd !== undefined
-              ? formatCommandValue(motor.command_kd, "kd", prev[motor.id]?.kd ?? "0.0")
-              : motor.kd !== undefined
-                ? formatCommandValue(motor.kd, "kd", prev[motor.id]?.kd ?? "0.0")
-                : (prev[motor.id]?.kd ?? "0.0"),
+          // Sync: 명령값이 아니라 모터의 실제 현재 상태(피드백)를 입력칸에 채운다
+          position: formatCommandValue(motor.position, "position", prev[motor.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(motor.velocity, "velocity", prev[motor.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(motor.torque, "torque", prev[motor.id]?.torque ?? "0.00"),
+          // kp/kd는 센서 피드백이 없으므로 현재 적용 중인 명령값을 사용, 없으면 yaml 기본값
+          kp: formatCommandValue(motor.command_kp ?? motor.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
+          kd: formatCommandValue(motor.command_kd ?? motor.kd, "kd", gains ? gains.kd.toFixed(1) : "0.0"),
         },
       }));
     },
@@ -955,20 +969,25 @@ function App() {
     return state.physical_motors;
   }, [state]);
 
-  // 물리 모터 뷰에서 Sync: 물리 모터 현재 위치를 해당 조인트 명령으로 가져옴
+  // 물리 모터 뷰에서 Sync: 물리 모터 현재 위치 + 해당 조인트 기본 게인을 물리 모터 명령칸에 채움
+  // (Send도 physMotorCommands를 쓰므로 여기도 motorCommands가 아니라 physMotorCommands를 갱신해야 함)
   const handlePhysMotorSyncById = React.useCallback(
     (physMotorId: number) => {
       const info = PHYS_MOTOR_INFO.find((m) => m.id === physMotorId);
       if (!info) return;
       const physMotor = displayPhysMotors.find((pm) => pm.id === physMotorId);
       if (!physMotor) return;
-      setMotorCommands((prev) => ({
+      const gains = DEFAULT_JOINT_GAINS[info.jointIdx];
+      setPhysMotorCommands((prev) => ({
         ...prev,
-        [info.jointIdx]: {
-          ...(prev[info.jointIdx] ?? EMPTY_MOTOR_COMMAND),
+        [physMotorId]: {
+          ...(prev[physMotorId] ?? EMPTY_MOTOR_COMMAND),
+          // Sync: 물리 모터의 실제 현재 상태(피드백)를 입력칸에 채운다
           position: formatCommandValue(physMotor.position, "position", "0.00"),
-          velocity: "0.00",
-          torque: "0.00",
+          velocity: formatCommandValue(physMotor.velocity, "velocity", "0.00"),
+          torque: formatCommandValue(physMotor.torque, "torque", "0.00"),
+          kp: formatCommandValue(physMotor.command_kp ?? physMotor.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
+          kd: formatCommandValue(physMotor.command_kd ?? physMotor.kd, "kd", gains ? gains.kd.toFixed(1) : "0.0"),
         },
       }));
     },
@@ -1005,6 +1024,42 @@ function App() {
     [state, sendMotorPower],
   );
 
+  // 물리 모터(m01~m07) 직접 명령 변경 — 모터 뷰용
+  const handlePhysMotorCommandChange = React.useCallback((physMotorId: number, next: MotorCommandFields) => {
+    setPhysMotorCommands((prev) => ({
+      ...prev,
+      [physMotorId]: next,
+    }));
+  }, []);
+
+  // 물리 모터(m01~m07) 직접 raw 명령 전송 — IK/와이어 텐션 커플링 우회 (모터 명령 모드)
+  const handlePhysMotorSendById = React.useCallback(
+    (physMotorId: number) => {
+      const cmd = physMotorCommands[physMotorId];
+      if (!cmd) return;
+      const durationSec = parseNumberOrUndefined(cmd.durationMs);
+      sendPhysMotorCommand(physMotorId, {
+        position: parseNumberOrUndefined(cmd.position),
+        velocity: parseNumberOrUndefined(cmd.velocity),
+        torque: parseNumberOrUndefined(cmd.torque),
+        kp: parseNumberOrUndefined(cmd.kp),
+        kd: parseNumberOrUndefined(cmd.kd),
+        duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+      });
+    },
+    [physMotorCommands, sendPhysMotorCommand],
+  );
+
+  // 물리 모터(m01~m07) 직접 on/off — 모터 명령 모드
+  const handlePhysMotorTogglePowerById = React.useCallback(
+    (physMotorId: number) => {
+      const physMotor = displayPhysMotors.find((pm) => pm.id === physMotorId);
+      if (!physMotor) return;
+      sendPhysMotorPower(physMotorId, !(physMotor.enabled ?? false));
+    },
+    [displayPhysMotors, sendPhysMotorPower],
+  );
+
   // === 선택 / 일괄 입력 ===
 
   const handleToggleSelectMotor = React.useCallback((motorId: number) => {
@@ -1018,7 +1073,27 @@ function App() {
     });
   }, [state]);
 
+  // 물리 모터(m01~m07) 선택 토글 — 모터 뷰용
+  const handleToggleSelectPhysMotor = React.useCallback((physMotorId: number) => {
+    setSelectedPhysMotorIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(physMotorId)) next.delete(physMotorId);
+      else next.add(physMotorId);
+      return next;
+    });
+  }, []);
+
   const handleToggleSelectAll = React.useCallback(() => {
+    if (!showJointView) {
+      setSelectedPhysMotorIds((prev) => {
+        const allIds = PHYS_MOTOR_INFO.map((info) => info.id);
+        if (allIds.length > 0 && allIds.every((id) => prev.has(id))) {
+          return new Set();
+        }
+        return new Set(allIds);
+      });
+      return;
+    }
     setSelectedMotorIds((prev) => {
       const allIds =
         state?.motors.filter((m) => isMotorControlEnabled(m.name)).map((m) => m.id) ?? [];
@@ -1027,9 +1102,27 @@ function App() {
       }
       return new Set(allIds);
     });
-  }, [state]);
+  }, [state, showJointView]);
 
   const handleBulkApply = React.useCallback(() => {
+    if (!showJointView) {
+      setPhysMotorCommands((prev) => {
+        const next = { ...prev };
+        for (const physMotorId of selectedPhysMotorIds) {
+          const cur = next[physMotorId] ?? EMPTY_MOTOR_COMMAND;
+          next[physMotorId] = {
+            position:   bulkCmd.position   !== "" ? bulkCmd.position   : cur.position,
+            velocity:   bulkCmd.velocity   !== "" ? bulkCmd.velocity   : cur.velocity,
+            torque:     bulkCmd.torque     !== "" ? bulkCmd.torque     : cur.torque,
+            kp:         bulkCmd.kp         !== "" ? bulkCmd.kp         : cur.kp,
+            kd:         bulkCmd.kd         !== "" ? bulkCmd.kd         : cur.kd,
+            durationMs: bulkCmd.durationMs !== "" ? bulkCmd.durationMs : cur.durationMs,
+          };
+        }
+        return next;
+      });
+      return;
+    }
     setMotorCommands((prev) => {
       const next = { ...prev };
       for (const motorId of selectedMotorIds) {
@@ -1049,9 +1142,25 @@ function App() {
       }
       return next;
     });
-  }, [selectedMotorIds, bulkCmd]);
+  }, [selectedMotorIds, selectedPhysMotorIds, bulkCmd, showJointView, state]);
 
   const handleSendSelected = React.useCallback(() => {
+    if (!showJointView) {
+      for (const physMotorId of selectedPhysMotorIds) {
+        const cmd = physMotorCommands[physMotorId];
+        if (!cmd) continue;
+        const durationSec = parseNumberOrUndefined(cmd.durationMs);
+        sendPhysMotorCommand(physMotorId, {
+          position: parseNumberOrUndefined(cmd.position),
+          velocity: parseNumberOrUndefined(cmd.velocity),
+          torque: parseNumberOrUndefined(cmd.torque),
+          kp: parseNumberOrUndefined(cmd.kp),
+          kd: parseNumberOrUndefined(cmd.kd),
+          duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+        });
+      }
+      return;
+    }
     if (!state) return;
     for (const motorId of selectedMotorIds) {
       const cmd = motorCommands[motorId];
@@ -1068,7 +1177,7 @@ function App() {
         duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
       });
     }
-  }, [state, selectedMotorIds, motorCommands, sendMotorCommand]);
+  }, [state, selectedMotorIds, selectedPhysMotorIds, motorCommands, physMotorCommands, showJointView, sendMotorCommand, sendPhysMotorCommand]);
 
   // === 일괄 동작 ===
 
@@ -1079,23 +1188,33 @@ function App() {
       const next: Record<number, MotorCommandFields> = { ...prev };
       for (const m of state.motors) {
         if (!isMotorControlEnabled(m.name)) continue;
+        const gains = DEFAULT_JOINT_GAINS[m.id];
         next[m.id] = {
           ...(next[m.id] ?? makeInitialCommand(m)),
-          position: formatCommandValue(m.command_position ?? m.position, "position", next[m.id]?.position ?? "0.00"),
-          velocity: formatCommandValue(m.command_velocity ?? m.velocity, "velocity", next[m.id]?.velocity ?? "0.00"),
-          torque: formatCommandValue(m.command_torque ?? m.torque, "torque", next[m.id]?.torque ?? "0.00"),
-          kp:
-            m.command_kp !== undefined
-              ? formatCommandValue(m.command_kp, "kp", next[m.id]?.kp ?? "0.0")
-              : m.kp !== undefined
-                ? formatCommandValue(m.kp, "kp", next[m.id]?.kp ?? "0.0")
-              : (next[m.id]?.kp ?? "0.0"),
-          kd:
-            m.command_kd !== undefined
-              ? formatCommandValue(m.command_kd, "kd", next[m.id]?.kd ?? "0.0")
-              : m.kd !== undefined
-                ? formatCommandValue(m.kd, "kd", next[m.id]?.kd ?? "0.0")
-              : (next[m.id]?.kd ?? "0.0"),
+          // Sync: 명령값이 아니라 모터의 실제 현재 상태(피드백)를 입력칸에 채운다
+          position: formatCommandValue(m.position, "position", next[m.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(m.velocity, "velocity", next[m.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(m.torque, "torque", next[m.id]?.torque ?? "0.00"),
+          kp: formatCommandValue(m.command_kp ?? m.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
+          kd: formatCommandValue(m.command_kd ?? m.kd, "kd", gains ? gains.kd.toFixed(1) : "0.0"),
+        };
+      }
+      return next;
+    });
+
+    // 물리 모터(m01~m07) 직접 명령 — 모터 뷰(모터 명령 모드)에서도 Sync All이 동작하도록 함께 채움
+    setPhysMotorCommands((prev) => {
+      const next: Record<number, MotorCommandFields> = { ...prev };
+      for (const pm of state.physical_motors ?? []) {
+        const info = PHYS_MOTOR_INFO.find((i) => i.id === pm.id);
+        const gains = info ? DEFAULT_JOINT_GAINS[info.jointIdx] : undefined;
+        next[pm.id] = {
+          ...(next[pm.id] ?? EMPTY_MOTOR_COMMAND),
+          position: formatCommandValue(pm.position, "position", next[pm.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(pm.velocity, "velocity", next[pm.id]?.velocity ?? "0.00"),
+          torque: formatCommandValue(pm.torque, "torque", next[pm.id]?.torque ?? "0.00"),
+          kp: formatCommandValue(pm.command_kp ?? pm.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
+          kd: formatCommandValue(pm.command_kd ?? pm.kd, "kd", gains ? gains.kd.toFixed(1) : "0.0"),
         };
       }
       return next;
@@ -1121,7 +1240,12 @@ function App() {
     }
   };
 
+  // 조인트 뷰: 가상 조인트 5개 On/Off, 모터 뷰: 물리 모터 7개 On/Off
   const handleAllOn = () => {
+    if (!showJointView) {
+      for (const info of PHYS_MOTOR_INFO) sendPhysMotorPower(info.id, true);
+      return;
+    }
     if (!state) return;
     for (const m of state.motors) {
       if (!isMotorControlEnabled(m.name)) continue;
@@ -1130,6 +1254,10 @@ function App() {
   };
 
   const handleAllOff = () => {
+    if (!showJointView) {
+      for (const info of PHYS_MOTOR_INFO) sendPhysMotorPower(info.id, false);
+      return;
+    }
     if (!state) return;
     for (const m of state.motors) {
       if (!isMotorControlEnabled(m.name)) continue;
@@ -1373,8 +1501,11 @@ function App() {
   );
 
   const selectedControlMotorCount = React.useMemo(
-    () => controlMotors.filter((m) => selectedMotorIds.has(m.id)).length,
-    [controlMotors, selectedMotorIds],
+    () =>
+      showJointView
+        ? controlMotors.filter((m) => selectedMotorIds.has(m.id)).length
+        : selectedPhysMotorIds.size,
+    [controlMotors, selectedMotorIds, selectedPhysMotorIds, showJointView],
   );
 
   const retryRemainingMs = authRetryAt ? Math.max(0, authRetryAt - authRetryNow) : 0;
@@ -1528,7 +1659,13 @@ function App() {
               <input
                 type="checkbox"
                 checked={showJointView}
-                onChange={() => setShowJointView((prev) => !prev)}
+                onChange={() => {
+                  setShowJointView((prev) => {
+                    const next = !prev;
+                    sendViewMode(next ? "joint" : "motor");
+                    return next;
+                  });
+                }}
               />
               <span className="toggle-slider" />
             </label>
@@ -1647,13 +1784,18 @@ function App() {
                           <input
                             type="checkbox"
                             checked={
-                              controlMotors.length > 0 &&
-                              controlMotors.every((m) => selectedMotorIds.has(m.id))
+                              showJointView
+                                ? controlMotors.length > 0 && controlMotors.every((m) => selectedMotorIds.has(m.id))
+                                : PHYS_MOTOR_INFO.length > 0 && PHYS_MOTOR_INFO.every((info) => selectedPhysMotorIds.has(info.id))
                             }
                             ref={(el) => {
                               if (el) {
-                                const some = controlMotors.some((m) => selectedMotorIds.has(m.id));
-                                const all  = controlMotors.length > 0 && controlMotors.every((m) => selectedMotorIds.has(m.id));
+                                const some = showJointView
+                                  ? controlMotors.some((m) => selectedMotorIds.has(m.id))
+                                  : PHYS_MOTOR_INFO.some((info) => selectedPhysMotorIds.has(info.id));
+                                const all = showJointView
+                                  ? controlMotors.length > 0 && controlMotors.every((m) => selectedMotorIds.has(m.id))
+                                  : PHYS_MOTOR_INFO.length > 0 && PHYS_MOTOR_INFO.every((info) => selectedPhysMotorIds.has(info.id));
                                 el.indeterminate = some && !all;
                               }
                             }}
@@ -1725,22 +1867,21 @@ function App() {
                               position: 0, velocity: 0, torque: 0, temperature: 0,
                               error: false, warning: false, enabled: false,
                             };
-                            const jointMotor = displayMotors[info.jointIdx];
-                            const powered = hasStateData ? (jointMotor?.enabled ?? false) : false;
+                            const powered = hasStateData ? (physMotor.enabled ?? false) : false;
                             return (
                               <MotorCommandRow
                                 key={info.id}
                                 motor={physMotor}
                                 hasData={hasStateData}
                                 canControl={canControl}
-                                cmd={motorCommands[info.jointIdx] ?? EMPTY_MOTOR_COMMAND}
-                                onChange={(_, next) => handleMotorCommandChange(info.jointIdx, next)}
+                                cmd={physMotorCommands[info.id] ?? EMPTY_MOTOR_COMMAND}
+                                onChange={(_, next) => handlePhysMotorCommandChange(info.id, next)}
                                 onSync={() => handlePhysMotorSyncById(info.id)}
-                                onSend={() => handleMotorSendById(info.jointIdx)}
+                                onSend={() => handlePhysMotorSendById(info.id)}
                                 powered={powered}
-                                onTogglePower={() => handleMotorTogglePowerById(info.jointIdx)}
-                                selected={selectedMotorIds.has(info.jointIdx)}
-                                onToggleSelect={() => handleToggleSelectMotor(info.jointIdx)}
+                                onTogglePower={() => handlePhysMotorTogglePowerById(info.id)}
+                                selected={selectedPhysMotorIds.has(info.id)}
+                                onToggleSelect={() => handleToggleSelectPhysMotor(info.id)}
                               />
                             );
                           })

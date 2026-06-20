@@ -267,8 +267,10 @@ private:
                 return false;
             }
 
-            // 토크 한계
-            if (std::abs(s.motor_state[i].torque) > p_joint_torque_limit.read()) {
+            // 토크 한계 — joint2(lower_link)/joint4(upper_link)는 힘[N] 단위/변환비가
+            // 아직 미검증(실측 전 placeholder)이라 토크 기반 LOCK 검사에서 제외한다.
+            if (i != 2 && i != 4 &&
+                std::abs(s.motor_state[i].torque) > p_joint_torque_limit.read()) {
                 reason = "joint " + std::to_string(i) + " torque=" +
                          std::to_string(s.motor_state[i].torque) + " exceeds limit";
                 return false;

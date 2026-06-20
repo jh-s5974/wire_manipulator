@@ -64,6 +64,26 @@ private:
         "phys_motor/m05/io", "phys_motor/m06/io",
         "phys_motor/m07/io",
     };
+    // 물리 모터에 실제로 적용된 명령 echo — GUI Sync가 "현재 값"을 보여주는 데 사용
+    static constexpr const char* kPhysCmdAppliedChannels[kPhysCount] = {
+        "phys_motor/m01/cmd_applied", "phys_motor/m02/cmd_applied",
+        "phys_motor/m03/cmd_applied", "phys_motor/m04/cmd_applied",
+        "phys_motor/m05/cmd_applied", "phys_motor/m06/cmd_applied",
+        "phys_motor/m07/cmd_applied",
+    };
+    // 모터 명령 모드용 — 물리 모터 직접 명령/on 채널 (CanBus0/1이 구독, IK 우회)
+    static constexpr const char* kPhysCmdChannels[kPhysCount] = {
+        "gui/phys_motor/m01/cmd", "gui/phys_motor/m02/cmd",
+        "gui/phys_motor/m03/cmd", "gui/phys_motor/m04/cmd",
+        "gui/phys_motor/m05/cmd", "gui/phys_motor/m06/cmd",
+        "gui/phys_motor/m07/cmd",
+    };
+    static constexpr const char* kPhysOnChannels[kPhysCount] = {
+        "gui/phys_motor/m01/on", "gui/phys_motor/m02/on",
+        "gui/phys_motor/m03/on", "gui/phys_motor/m04/on",
+        "gui/phys_motor/m05/on", "gui/phys_motor/m06/on",
+        "gui/phys_motor/m07/on",
+    };
 
     struct JointIo {
         const char* name;
@@ -118,6 +138,17 @@ private:
         DataReader<custom_types::MotorState>{kPhysChannels[6], DependencyType::Weak},
     };
 
+    // ── 물리 모터 적용 명령 echo 채널 (GUI Sync용) ──
+    DataReader<custom_types::MotorCmd> dr_phys_cmd_applied_[kPhysCount] = {
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[0], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[1], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[2], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[3], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[4], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[5], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kPhysCmdAppliedChannels[6], DependencyType::Weak},
+    };
+
     // ── 물리 모터 CAN tx/rx 통계 채널 (GUI 모터 뷰 진단용) ──
     DataReader<custom_types::MotorIoStats> dr_phys_io_[kPhysCount] = {
         DataReader<custom_types::MotorIoStats>{kPhysIoChannels[0], DependencyType::Weak},
@@ -128,6 +159,28 @@ private:
         DataReader<custom_types::MotorIoStats>{kPhysIoChannels[5], DependencyType::Weak},
         DataReader<custom_types::MotorIoStats>{kPhysIoChannels[6], DependencyType::Weak},
     };
+
+    // ── 모터 명령 모드 — 물리 모터 직접 명령/on 채널 (CanBus0/1 구독) ──
+    DataWriter<custom_types::MotorCmd> dw_phys_cmd_[kPhysCount] = {
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[0]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[1]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[2]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[3]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[4]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[5]},
+        DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[6]},
+    };
+    DataWriter<bool> dw_phys_on_[kPhysCount] = {
+        DataWriter<bool>{kPhysOnChannels[0]},
+        DataWriter<bool>{kPhysOnChannels[1]},
+        DataWriter<bool>{kPhysOnChannels[2]},
+        DataWriter<bool>{kPhysOnChannels[3]},
+        DataWriter<bool>{kPhysOnChannels[4]},
+        DataWriter<bool>{kPhysOnChannels[5]},
+        DataWriter<bool>{kPhysOnChannels[6]},
+    };
+    // 모터 명령 모드 전역 플래그 — true: CanBus0/1이 조인트 IK를 우회하고 phys_motor cmd를 직접 적용
+    DataWriter<bool> dw_motor_raw_mode_{"gui/motor_raw_mode"};
 
     // 공통 GUI 상태 채널
     DataReader<bool> dr_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
@@ -161,6 +214,10 @@ private:
     std::array<bool,                     kJointCount> joint_online_{};
     std::array<bool,                     kJointCount> motor_power_on_{};
     std::array<custom_types::MotorCmd,   kJointCount> cmd_cache_{};
+    std::array<custom_types::MotorCmd,   kPhysCount> phys_cmd_cache_{};
+    std::array<bool,                     kPhysCount> phys_power_on_{};
+    std::array<custom_types::MotorCmd,   kPhysCount> phys_cmd_applied_cache_{};
+    std::array<bool,                     kPhysCount> phys_cmd_applied_online_{};
 
     bool control_requested_ = false;
     bool control_granted_   = false;
@@ -179,6 +236,10 @@ private:
             });
             dr_phys_io_[i].on_update([&, i](const custom_types::MotorIoStats& d) {
                 phys_io_cache_[i] = d;
+            });
+            dr_phys_cmd_applied_[i].on_update([&, i](const custom_types::MotorCmd& d) {
+                phys_cmd_applied_cache_[i]  = d;
+                phys_cmd_applied_online_[i] = true;
             });
         }
         for (int i = 0; i < kJointCount; i++) {
@@ -259,6 +320,16 @@ private:
             psnap.velocity = ps.vel;
             psnap.torque   = ps.torque;
             psnap.enabled  = ps.enabled;
+            if (phys_cmd_applied_online_[i]) {
+                const auto& ac = phys_cmd_applied_cache_[i];
+                psnap.command_position = ac.pos;
+                psnap.command_velocity = ac.vel;
+                psnap.command_torque   = ac.torque;
+                psnap.command_kp       = ac.kp;
+                psnap.command_kd       = ac.kd;
+                psnap.kp = ac.kp;
+                psnap.kd = ac.kd;
+            }
             const auto& io = phys_io_cache_[i];
             psnap.tx_count = io.tx_count;
             psnap.rx_count = io.rx_count;
@@ -297,6 +368,15 @@ private:
                 break;
             case wsbridge::Event::Kind::DataLogger:
                 handle_data_logger(ev.data_logger);
+                break;
+            case wsbridge::Event::Kind::PhysMotorPower:
+                handle_phys_motor_power(ev.phys_power);
+                break;
+            case wsbridge::Event::Kind::PhysMotorCommand:
+                handle_phys_motor_command(ev.phys_command);
+                break;
+            case wsbridge::Event::Kind::ViewMode:
+                handle_view_mode(ev.view_mode);
                 break;
         }
     }
@@ -363,6 +443,51 @@ private:
         };
         if (cmd.is_all) for (int i = 0; i < kJointCount; i++) apply(i);
         else apply(cmd.motor_id);
+    }
+
+    // 물리 모터(m01~m07, 1-based) 직접 on/off — 모터 명령 모드 (CanBus0/1이 gui/motor_raw_mode=true일 때만 적용)
+    void handle_phys_motor_power(const wsbridge::Event::PhysPowerPayload& pwr) {
+        if (!control_granted_) {
+            getLogger()->warn("[{}] phys motor power ignored: not granted", getName());
+            return;
+        }
+        auto apply = [&](int idx /*0-based*/) {
+            if (idx < 0 || idx >= kPhysCount) return;
+            dw_phys_on_[idx].write(pwr.on);
+            phys_power_on_[idx] = pwr.on;
+        };
+        if (pwr.is_all) for (int i = 0; i < kPhysCount; i++) apply(i);
+        else apply(pwr.motor_id - 1);
+    }
+
+    // 물리 모터(m01~m07, 1-based) 직접 raw 명령 — 모터 명령 모드 (IK/텐션 커플링 우회)
+    void handle_phys_motor_command(const wsbridge::Event::PhysCommandPayload& cmd) {
+        if (!control_granted_) {
+            getLogger()->warn("[{}] phys motor cmd ignored: not granted", getName());
+            return;
+        }
+        auto apply = [&](int idx /*0-based*/) {
+            if (idx < 0 || idx >= kPhysCount) return;
+            auto& c = phys_cmd_cache_[idx];
+            std::snprintf(c.name, sizeof(c.name), "%s", kPhysNames[idx]);
+            if (cmd.cmd.position)  c.pos    = *cmd.cmd.position;
+            if (cmd.cmd.velocity)  c.vel    = *cmd.cmd.velocity;
+            if (cmd.cmd.torque)    c.torque = *cmd.cmd.torque;
+            if (cmd.cmd.kp)        c.kp     = *cmd.cmd.kp;
+            if (cmd.cmd.kd)        c.kd     = *cmd.cmd.kd;
+            const double yaml_dur_ms = p_default_duration_sec.read() * 1000.0;
+            c.duration_ms = (yaml_dur_ms >= 0.0) ? yaml_dur_ms : cmd.cmd.duration_ms;
+            dw_phys_cmd_[idx].write(c);
+        };
+        if (cmd.is_all) for (int i = 0; i < kPhysCount; i++) apply(i);
+        else apply(cmd.motor_id - 1);
+    }
+
+    // GUI 뷰 모드 전환 → CanBus0/1 제어 경로 전환 (joint IK ↔ phys_motor 직접 명령)
+    void handle_view_mode(const wsbridge::Event::ViewModePayload& vm) {
+        const bool raw = (vm.mode == "motor");
+        dw_motor_raw_mode_.write(raw);
+        getLogger()->info("[{}] view_mode={} (raw_mode={})", getName(), vm.mode, raw);
     }
 
     void handle_data_logger(const wsbridge::Event::DataLoggerPayload& payload) {

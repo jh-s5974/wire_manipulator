@@ -95,9 +95,6 @@ public:
             s.gui_mode_request_online = true;
         });
 
-        const auto& joint_kp = p_joint_kp.read();
-        const auto& joint_kd = p_joint_kd.read();
-
         for (int i = 0; i < N_JOINTS; i++) {
             dr_gui_mtr_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
                 s.gui_motor_cmd[i]        = data;
@@ -109,11 +106,23 @@ public:
                 s.gui_motor_on_online[i] = true;
 
                 if (on && s.gui_control_granted) {
+                    // 켜진 직후, GUI가 아직 Send하지 않은 상태: kp=0/torque=0 (힘 없음),
+                    // kd=3.0(댐핑)만 걸어서 외부 충격에 의한 의도치 않은 흔들림만 막는다.
+                    // Send가 오면 dr_gui_mtr_cmd 핸들러가 실제 명령으로 덮어쓴다.
                     custom_types::MotorCmd safe{};
                     safe.pos    = s.robot_state.motor[i].pos;
-                    safe.kp     = joint_kp.size() > (size_t)i ? joint_kp[i] : 0.0;
+                    safe.kp     = 0.0;
                     safe.kd     = 3.0;
+                    safe.torque = 0.0;
                     dw_mtr_cmd[i].write(safe);
+                    // GUI가 아직 이 조인트에 명시적으로 Send한 적이 없으면(gui_motor_cmd_online=false)
+                    // 이 safe 값을 시드로 깔아서 process_gui_command_bridge가 매 틱 계속 재전송하게 한다.
+                    // 그렇지 않으면 켜진 직후 1회만 전송되고 끊겨, 1초 뒤 SafetyLayer가
+                    // "manager cmd timeout"으로 LOCK을 거는 문제가 발생한다.
+                    if (!s.gui_motor_cmd_online[i]) {
+                        s.gui_motor_cmd[i]        = safe;
+                        s.gui_motor_cmd_online[i] = true;
+                    }
                 }
             });
         }
@@ -282,9 +291,6 @@ private:
     DataWriter<bool> dw_gui_control_granted{"gui/motor/control_granted"};
     DataWriter<int>  dw_gui_mode_current{"gui/robot/mode_current"};
     DataWriter<int>  dw_safety_level{"manager/safety_level"};
-
-    Parameter<std::vector<double>> p_joint_kp{"joint_kp"};
-    Parameter<std::vector<double>> p_joint_kd{"joint_kd"};
 };
 
 } // namespace task_pool

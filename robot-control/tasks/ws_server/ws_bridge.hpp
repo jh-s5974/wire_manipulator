@@ -202,6 +202,25 @@ struct Event {
         bool start = false;
     };
 
+    // 물리 모터(m01~m07, 1-based) 직접 on/off — 모터 명령 모드용
+    struct PhysPowerPayload {
+        bool is_all = false;
+        int motor_id = -1; // 1-based (m01=1 ... m07=7)
+        bool on = true;
+    };
+
+    // 물리 모터(m01~m07, 1-based) 직접 raw 명령 — 모터 명령 모드용 (IK/커플링 우회)
+    struct PhysCommandPayload {
+        bool is_all = false;
+        int motor_id = -1; // 1-based (m01=1 ... m07=7)
+        MotorCommand cmd;
+    };
+
+    // GUI 뷰 모드 전환 (조인트 뷰 ↔ 모터 뷰) → 백엔드 제어 경로 전환
+    struct ViewModePayload {
+        std::string mode; // "joint" | "motor"
+    };
+
     enum class Kind {
         SubscribeState,
         MotorPower,
@@ -209,7 +228,10 @@ struct Event {
         MotorControlRequest,
         RobotModeRequest,
         SafetyReset,
-        DataLogger
+        DataLogger,
+        PhysMotorPower,
+        PhysMotorCommand,
+        ViewMode
     } kind;
 
     std::int64_t timestamp_ms = 0;
@@ -221,6 +243,9 @@ struct Event {
     RobotModeRequestPayload robot_mode_request;
     SafetyResetPayload safety_reset;
     DataLoggerPayload data_logger;
+    PhysPowerPayload phys_power;
+    PhysCommandPayload phys_command;
+    ViewModePayload view_mode;
 };
 
 } // namespace wsbridge
@@ -583,6 +608,57 @@ private:
             else if (type == "data_logger") {
                 ev.kind = Event::Kind::DataLogger;
                 ev.data_logger.start = payload.value("start", false);
+            }
+            else if (type == "phys_motor_power") {
+                ev.kind = Event::Kind::PhysMotorPower;
+                ev.phys_power.on = payload.value("on", true);
+
+                if (!payload.contains("motorId")) {
+                    std::cout << "[WS] phys_motor_power missing motorId\n";
+                    return;
+                }
+
+                if (payload["motorId"].is_string() &&
+                    payload["motorId"].get<std::string>() == "all") {
+                    ev.phys_power.is_all = true;
+                } else {
+                    ev.phys_power.is_all = false;
+                    ev.phys_power.motor_id = payload["motorId"].get<int>();
+                }
+            }
+            else if (type == "phys_motor_command") {
+                ev.kind = Event::Kind::PhysMotorCommand;
+
+                if (!payload.contains("motorId") || !payload.contains("command") || !payload["command"].is_object()) {
+                    std::cout << "[WS] phys_motor_command missing fields\n";
+                    return;
+                }
+
+                if (payload["motorId"].is_string() &&
+                    payload["motorId"].get<std::string>() == "all") {
+                    ev.phys_command.is_all = true;
+                } else {
+                    ev.phys_command.is_all = false;
+                    ev.phys_command.motor_id = payload["motorId"].get<int>();
+                }
+
+                const auto& c = payload["command"];
+                auto get_opt = [&](const char* key) -> std::optional<double> {
+                    if (!c.contains(key) || c[key].is_null())
+                        return std::nullopt;
+                    return c[key].get<double>();
+                };
+
+                ev.phys_command.cmd.position    = get_opt("position");
+                ev.phys_command.cmd.velocity    = get_opt("velocity");
+                ev.phys_command.cmd.torque      = get_opt("torque");
+                ev.phys_command.cmd.kp          = get_opt("kp");
+                ev.phys_command.cmd.kd          = get_opt("kd");
+                ev.phys_command.cmd.duration_ms = c.value("duration_ms", 0.0);
+            }
+            else if (type == "view_mode") {
+                ev.kind = Event::Kind::ViewMode;
+                ev.view_mode.mode = payload.value("mode", std::string("joint"));
             }
             else {
                 std::cout << "[WS] unknown type: " << type << "\n";

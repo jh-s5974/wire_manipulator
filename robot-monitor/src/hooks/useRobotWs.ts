@@ -73,6 +73,46 @@ export function useRobotWs({
     sendRaw(msg);
   };
 
+  const sendPhysMotorPower = (motorId: number | "all", on: boolean) => {
+    const msg: BaseMessage<{ motorId: number | "all"; on: boolean }> = {
+      type: "phys_motor_power",
+      timestamp: Date.now(),
+      payload: { motorId, on },
+    };
+    sendRaw(msg);
+  };
+
+  const sendPhysMotorCommand = (
+    motorId: number | "all",
+    cmd: {
+      position?: number;
+      velocity?: number;
+      torque?: number;
+      kp?: number;
+      kd?: number;
+      duration_ms?: number;
+    },
+  ) => {
+    const msg: BaseMessage<{
+      motorId: number | "all";
+      command: typeof cmd;
+    }> = {
+      type: "phys_motor_command",
+      timestamp: Date.now(),
+      payload: { motorId, command: cmd },
+    };
+    sendRaw(msg);
+  };
+
+  const sendViewMode = (mode: "joint" | "motor") => {
+    const msg: BaseMessage<{ mode: string }> = {
+      type: "view_mode",
+      timestamp: Date.now(),
+      payload: { mode },
+    };
+    sendRaw(msg);
+  };
+
   const sendMotorControlRequest = (request = true) => {
     const msg: BaseMessage<{ request: boolean }> = {
       type: "motor_control_request",
@@ -327,6 +367,9 @@ export function useRobotWs({
     authRetryAt,
     sendMotorPower,
     sendMotorCommand,
+    sendPhysMotorPower,
+    sendPhysMotorCommand,
+    sendViewMode,
     sendMotorControlRequest,
     sendRobotModeRequest,
     sendSafetyReset,

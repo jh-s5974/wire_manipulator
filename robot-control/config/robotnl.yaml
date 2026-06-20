@@ -3,9 +3,13 @@
 # 조인트 순서 (0~4):
 #   joint0: base_yaw   (revolute,  RobStride03 0x01, CAN0)
 #   joint1: pitch       (revolute,  RobStride03 0x02, CAN0)
-#   joint2: lower_link  (prismatic, MyActuatorX6 0x03, CAN1, ball screw)
+#   joint2: lower_link  (prismatic, MyActuatorX6 0x03, CAN0, ball screw)
 #   joint3: elbow_pitch (revolute,  MyActuatorX6 0x04+0x05, CAN1, wire)
 #   joint4: upper_link  (prismatic, MyActuatorX6 0x06+0x07, CAN1, wire)
+#
+# 모터→CAN 버스: m01,m02,m03 → CAN0 / m04,m05,m06,m07 → CAN1
+# 모터 명령 모드(GUI "모터 뷰"): joint IK/와이어 텐션 커플링을 우회하고
+# 물리 모터(m01~m07)에 raw 위치 명령을 직접 전송 (gui/motor_raw_mode)
 # ─────────────────────────────────────────────────────────────────────────────
 
 gui/control_password: 1234
@@ -17,8 +21,8 @@ gui/control_password: 1234
 ws_bridge.default_duration_sec: -1.0
 
 # CAN 포트
-can0.port: can1
-can1.port: can2
+can0.port: can2
+can1.port: can1
 
 # 모터 회전 방향 보정 (실 하드웨어용) — 실제 배선/장착 방향에 맞춰 +1 또는 -1.
 # can_bus0.h/can_bus1.h 에서 모터 상태를 읽고 명령을 보낼 때 적용됨.
