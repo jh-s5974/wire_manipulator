@@ -20,8 +20,8 @@ namespace task_pool {
 //   0: base_yaw   (revolute,  RobStride03 0x01, CAN0)
 //   1: pitch       (revolute,  RobStride03 0x02, CAN0)
 //   2: lower_link  (prismatic, MyActuatorX6 0x03, CAN1)
-//   3: elbow_pitch (revolute,  MyActuatorX6 0x04+0x05, CAN1)
-//   4: upper_link  (prismatic, MyActuatorX6 0x06+0x07, CAN1)
+//   3: elbow_pitch (revolute,  MyActuatorX6 0x06+0x07, CAN1)
+//   4: upper_link  (prismatic, MyActuatorX6 0x04+0x05, CAN1)
 // ─────────────────────────────────────────────────────────────
 
 static constexpr int N_JOINTS = 5;

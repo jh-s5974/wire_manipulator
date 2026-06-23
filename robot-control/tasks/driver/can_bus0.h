@@ -1,21 +1,30 @@
 #pragma once
 
-// CAN Bus 0 — Joint 0, Joint 1 (직접 구동) & Joint 2 (볼스크류)
-// Joint 0: base_yaw   (RobStride03 0x01) — revolute, 모터=조인트 1:1
-// Joint 1: pitch       (RobStride03 0x02) — revolute, 모터=조인트 1:1
-// Joint 2: lower_link  (MyActuatorX6 0x03) — prismatic, 볼스크류 변환 (kin_manip::joint2_*)
+// ═══════════════════════════════════════════════════════════════════════════
+// CanBus0 태스크 — Joint 0(base_yaw) · Joint 1(pitch) · Joint 2(lower_link), CAN0 60Hz
+// ═══════════════════════════════════════════════════════════════════════════
 //
-// 모터 회전 방향 보정: config/robotnl.yaml 의 motor_direction_sign[0..2]
-// (m01, m02, m03) 을 실제 배선/장착에 맞춰 +1/-1 로 설정. 모터 상태를 읽는 시점과
-// 명령을 보내는 시점(send_motor_cmd)에 일괄 적용되며, 그 외 모든 코드는
-// 보정된 값을 "정방향"으로 다룬다.
+// 역할: joint0~2 의 가상 조인트 명령(jointN/cmd)을 받아 모터 명령으로 바꿔 CAN0에 송신하고,
+//       모터 피드백을 가상 조인트 상태(jointN/state)로 발행한다. GUI "모터 뷰"용 raw 모드도 지원.
 //
-// phys_motor/m03/state 는 항상 "모터 공간"(raw, ball-screw 변환 전) 위치를 publish한다.
-// CanBus1(joint3/4)이 lower_link 커플링 보정에 이 값을 사용한다.
+// 조인트 ↔ 모터 (1:1, joint2만 볼스크류 변환):
+//   joint0: base_yaw   — RobStride03  0x01, revolute,  모터=조인트 1:1
+//   joint1: pitch      — RobStride03  0x02, revolute,  모터=조인트 1:1
+//   joint2: lower_link — MyActuatorX6 0x03, prismatic, 볼스크류 변환 (kin_manip::joint2_*)
 //
-// 모터 명령 모드 (gui/motor_raw_mode == true):
-//   gui/phys_motor/m0X/cmd, gui/phys_motor/m0X/on 을 직접 구독하여 조인트 IK(볼스크류 변환)를
-//   완전히 우회하고 모터 raw 위치/속도/토크 명령을 그대로 송신한다 (실 모터 단위 테스트용).
+// 호스트 보간: joint0/1(RobStride, MIT류)은 모터 자체 속도제한이 없어 호스트가 duration 보간을
+//   돌린다. joint2(MyActuatorX6)는 0xA4 위치모드가 자체 속도제한을 돌리므로 보간 없이 즉시 적용.
+//
+// 모터 방향 보정: config/robotnl.yaml 의 motor_direction_sign[0..2](m01/m02/m03)를 배선/장착에
+//   맞춰 +1/-1 로 설정. 상태를 읽는 시점과 send_motor_cmd() 송신 시점에 적용되며, 그 외 모든
+//   코드는 보정된 값을 "정방향"으로 다룬다.
+//
+// phys_motor/m03/state: 항상 "모터 공간"(raw, 볼스크류 변환 전) 위치를 publish —
+//   CanBus1(joint3/4)이 lower_link 커플링 보정에 이 값을 사용한다.
+//
+// raw 모드 (gui/motor_raw_mode == true):
+//   gui/phys_motor/m0X/cmd · /on 을 직접 구독해 조인트 IK(볼스크류 변환)를 우회하고
+//   모터 raw 위치/속도/토크 명령을 그대로 송신한다 (실 모터 단위 테스트용).
 
 #include <rtfw/task.h>
 #include "../util.hpp"
@@ -62,6 +71,7 @@ public:
         for (auto& p : joint_fb_pos_)    p = 0.0;
         for (auto& c : cmds)             c = {};
         for (auto& i : cmd_interp)       i = {};
+        for (auto& i : phys_cmd_interp_) i = {};
         for (auto& c : phys_cmd_cache_)  c = {};
 
         const auto& sign = p_motor_sign.read();
@@ -71,16 +81,33 @@ public:
 
     void execute(void*) override {
         // 0. 모터 명령 모드 플래그 갱신
-        dr_motor_raw_mode_.on_update([&](const bool& v) { motor_raw_mode_ = v; });
+        dr_motor_raw_mode_.on_update([&](const bool& v) {
+            if (v != motor_raw_mode_) {
+                for (auto& i : cmd_interp)       i = {};
+                for (auto& i : phys_cmd_interp_) i = {};
+            }
+            motor_raw_mode_ = v;
+        });
 
         // 1. 상위 명령 수신 (조인트 경로 + 물리 모터 직접 경로 둘 다 항상 수신)
         for (int i = 0; i < N; i++) {
             dr_joint_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
                 cmd_wdt[i] = getExecutionLocalTick();
-                if (data.duration_ms > 0.0) {
+                // joint2(i==2, MyActuatorX6)는 0xA4 자체가 maxSpeed 기반 속도제한 PI를 돌기 때문에
+                // 호스트에서 또 보간하면 두 속도제한이 간섭해 목표가 들쭉날쭉해진다 — 그래서
+                // 목표값을 즉시 적용하고 속도는 joint_default_speed(yaml)로 조절한다.
+                // joint0/1(RobStride, MIT류)는 자체 속도제한이 없어 호스트 보간을 그대로 사용.
+                //
+                // 보간 시작점(start_ref)은 "피드백 위치"가 아니라 "마지막 명령값(cmds[i].pos)"이다.
+                // SafetyLayer가 SL_MANUAL에서 같은 명령을 200Hz로 재전달하므로(보간 안 함),
+                // start_ref를 피드백으로 두면: 보간 완료 후에도 재전달 때마다 피드백→목표 램프가
+                // 재시작되어 게인이 낮아 모터가 0.9에 멈추면 명령이 0.9→1.0을 무한 반복한다.
+                // start_ref=마지막 명령값이면: 같은 목표 재전달 시 start==target이라 램프가 상수가
+                // 되어(움직임 없음) 반복이 사라지고, 진짜 새 목표일 때만 마지막 명령값에서 램프한다.
+                if (i != 2 && data.duration_ms > 0.0) {
                     if (!cmd_interp[i].active ||
                         std::abs(data.pos - cmd_interp[i].target_pos) > 1e-4) {
-                        cmd_interp[i].start_ref   = joint_fb_pos_[i];
+                        cmd_interp[i].start_ref   = cmds[i].pos;
                         cmd_interp[i].target_pos  = data.pos;
                         cmd_interp[i].duration_ms = data.duration_ms;
                         cmd_interp[i].elapsed_ms  = 0.0;
@@ -100,8 +127,26 @@ public:
 
             dr_phys_cmd_[i].on_update([&, i](const custom_types::MotorCmd& data) {
                 phys_cmd_wdt_[i] = getExecutionLocalTick();
-                cmd_interp[i].active = false; // raw 모드는 보간 없음
-                phys_cmd_cache_[i] = data;
+                if (data.duration_ms > 0.0) {
+                    if (!phys_cmd_interp_[i].active ||
+                        std::abs(data.pos - phys_cmd_interp_[i].target_pos) > 1e-4) {
+                        // start_ref은 피드백이 아니라 마지막 명령값(phys_cmd_cache_)에서 출발 —
+                        // 같은 명령 200Hz 재전달 시 start==target이라 보간이 상수가 되어
+                        // 게인이 낮아 모터가 목표에 못 미쳐도 명령이 반복 진동하지 않는다.
+                        phys_cmd_interp_[i].start_ref   = phys_cmd_cache_[i].pos;
+                        phys_cmd_interp_[i].target_pos  = data.pos;
+                        phys_cmd_interp_[i].duration_ms = data.duration_ms;
+                        phys_cmd_interp_[i].elapsed_ms  = 0.0;
+                        phys_cmd_interp_[i].active       = true;
+                    }
+                } else {
+                    phys_cmd_interp_[i].active = false;
+                    phys_cmd_cache_[i].pos = data.pos;
+                }
+                phys_cmd_cache_[i].vel    = data.vel;
+                phys_cmd_cache_[i].torque = data.torque;
+                phys_cmd_cache_[i].kp     = data.kp;
+                phys_cmd_cache_[i].kd     = data.kd;
             });
 
             dr_phys_on_[i].on_update([&, i](const bool& on) { phys_on_flag_[i] = on; });
@@ -132,7 +177,9 @@ public:
                         const double raw_torque= motor_sign_[i] * motors[i]->state.torque;
                         const double joint_pos = motor_to_joint_pos(i, raw_pos);
 
-                        if (!motor_sync_[i]) {
+                        // hasValidPosition(): MyActuatorX6는 0x92 절대위치 응답을 받기 전엔 false —
+                        // MIT의 windowed(±12.5rad) 값으로 잘못 동기화되는 것을 방지
+                        if (!motor_sync_[i] && motors[i]->hasValidPosition()) {
                             joint_fb_pos_[i] = joint_pos;
                             cmds[i].pos      = joint_fb_pos_[i];
                             cmd_interp[i]    = {};
@@ -177,6 +224,7 @@ public:
                     if (motor_sync_[i]) {
                         motor_sync_[i] = false;
                         cmd_interp[i]  = {};
+                        phys_cmd_interp_[i] = {};
                         getLogger()->warn("[{}] Joint {} timeout, re-sync required", getName(), i);
                     }
                 }
@@ -188,18 +236,28 @@ public:
                     effective_on_[i] = true;
                     motor_sync_[i]   = false;
                     cmd_interp[i]    = {};
+                    phys_cmd_interp_[i] = {};
                     if (so > 0) motors[i]->Start(so);
                 } else if (effective_on_[i] && !target_on) {
                     getLogger()->info("[{}] Motor {} OFF ({})", getName(), i, motor_raw_mode_ ? "raw" : "joint");
                     effective_on_[i] = false;
                     motor_sync_[i]   = false;
                     cmd_interp[i]    = {};
+                    phys_cmd_interp_[i] = {};
                     if (so > 0) motors[i]->Stop(so);
                 }
 
                 MotorCommand applied{}; // 모터 공간(raw) 명령
 
                 if (motor_raw_mode_) {
+                    if (phys_cmd_interp_[i].active) {
+                        phys_cmd_interp_[i].elapsed_ms += dt_ms;
+                        const double ratio = std::min(phys_cmd_interp_[i].elapsed_ms / phys_cmd_interp_[i].duration_ms, 1.0);
+                        phys_cmd_cache_[i].pos = phys_cmd_interp_[i].start_ref +
+                            ratio * (phys_cmd_interp_[i].target_pos - phys_cmd_interp_[i].start_ref);
+                        if (ratio >= 1.0) phys_cmd_interp_[i].active = false;
+                    }
+
                     const bool ready = effective_on_[i] && motor_sync_[i] &&
                                         (tick - phys_cmd_wdt_[i] <= 1 * getFrequency());
                     if (ready) {
@@ -219,8 +277,15 @@ public:
 
                     const bool ready = effective_on_[i] && motor_sync_[i] && (tick - cmd_wdt[i] <= 1 * getFrequency());
                     if (ready) {
+                        // joint2(i==2)는 MyActuatorX6 위치모드(0xA4)를 쓰는데, velocity=0이면
+                        // 프로토콜상 "속도제한 없음"이 되어 위험하다 — GUI가 안 줬으면 yaml 기본값으로 대체
+                        double vel_cmd = cmds[i].vel;
+                        if (i == 2 && vel_cmd == 0.0) {
+                            const auto& def_speed = p_default_speed.read();
+                            if ((int)def_speed.size() > i) vel_cmd = def_speed[i];
+                        }
                         applied.pos    = joint_to_motor_pos(i, cmds[i].pos);
-                        applied.vel    = joint_to_motor_vel(i, cmds[i].vel);
+                        applied.vel    = joint_to_motor_vel(i, vel_cmd);
                         applied.torque = joint_to_motor_torque(i, cmds[i].torque);
                         applied.kp     = cmds[i].kp;
                         applied.kd     = cmds[i].kd;
@@ -238,12 +303,27 @@ public:
                 send_motor_cmd(i, applied); // 모터 방향 보정은 send_motor_cmd 내부에서 처리
             }
 
+            // 0x92 위치조회: N대 제어명령 전송 완료 후 라운드로빈으로 1대씩 전송.
+            // A4 제어명령 직후 0x92를 같은 모터에 보내면 펌웨어가 무시하므로, 제어 프레임들
+            // 뒤로 분리해 간격을 확보한다. RobStride(0x01/0x02)의 RequestExtra는 no-op이라
+            // 실제 0x92는 MyActuatorX6(joint2/0x03)에만 전송된다. (can_bus1과 동일 방식)
+            {
+                int q_i = (int)(tick % (uint64_t)N);
+                if (!motors[q_i]->RequestExtra(so)) tx_fail_count_[q_i]++;
+            }
+
             update_io_stats();
 
             PERIODIC_CALL(
                 for (int i = 0; i < N; i++) {
                     if (!motors[i]->state.online)
                         getLogger()->warn("[{}] Motor {} offline", getName(), motors[i]->id);
+                    else if (effective_on_[i] && !motors[i]->hasValidPosition())
+                        getLogger()->warn("[{}] Motor {} online이지만 0x92 위치 응답을 못 받음 — 동기화 불가", getName(), motors[i]->id);
+                    if (tx_fail_count_[i] > 0) {
+                        getLogger()->warn("[{}] Motor {} CAN TX 드랍 {}회 (버퍼 과부하 가능성)", getName(), i, tx_fail_count_[i]);
+                        tx_fail_count_[i] = 0;
+                    }
                 }
             , 1s);
 
@@ -356,6 +436,8 @@ private:
     Parameter<std::string> p_port{"can0.port", "can0"};
     // 모터 방향 보정 (m01, m02, m03) — 실제 배선/장착에 맞춰 +1/-1
     Parameter<std::vector<double>> p_motor_sign{"motor_direction_sign"};
+    // joint2 위치모드(0xA4)에서 velocity 미지정(0) 시 대체할 기본 속도 [rad/s 또는 m/s]
+    Parameter<std::vector<double>> p_default_speed{"joint_default_speed"};
 
     // ── 모터 ──
     std::vector<std::shared_ptr<Motor>> motors = {
@@ -369,6 +451,7 @@ private:
     // ── 내부 상태 ──
     bool   motor_raw_mode_ = false; // gui/motor_raw_mode 캐시
     std::array<MotorCmdInterp, N>            cmd_interp{};
+    std::array<MotorCmdInterp, N>            phys_cmd_interp_{}; // raw 모드 보간 (모터 공간)
     std::array<MotorCommand, N>              cmds{};            // 조인트 모드 명령 (joint 공간)
     std::array<custom_types::MotorCmd, N>    phys_cmd_cache_{}; // raw 모드 명령 (모터 공간)
     std::array<double, N>                    joint_fb_pos_{};
@@ -388,6 +471,7 @@ private:
 
     // ── CAN tx/rx 통계 (GUI 모터 뷰 진단용) ──
     uint32_t tx_count_[N]      = {};
+    uint32_t tx_fail_count_[N] = {}; // write() 실패(TX 버퍼 과부하로 드랍) 누적 카운트
     uint32_t rx_count_[N]      = {};
     uint32_t tx_count_prev_[N] = {};
     uint32_t rx_count_prev_[N] = {};
@@ -405,8 +489,13 @@ private:
         raw.pos    *= motor_sign_[i];
         raw.vel    *= motor_sign_[i];
         raw.torque *= motor_sign_[i];
-        motors[i]->Control(so, raw);
+        // kp>0(위치 추종 의도)이면 멀티턴 절대위치 모드, kp==0(순수 토크)면 MIT 모드로 자동 전환
+        // (MyActuatorX6 한정. RobStride03는 이 필드를 무시함)
+        raw.position_mode = cmd.kp > 0.0;
+        if (!motors[i]->Control(so, raw)) tx_fail_count_[i]++;
         tx_count_[i]++;
+        // 0x92 위치조회는 여기서 보내지 않는다 — 제어 명령 직후 같은 모터에 0x92를 보내면
+        // 펌웨어가 무시하므로, 제어 루프 종료 후 execute()에서 라운드로빈으로 분리 송신한다.
     }
 
     void update_io_stats() {

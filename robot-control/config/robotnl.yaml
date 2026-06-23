@@ -1,82 +1,98 @@
-# Wire Manipulator 설정
+# ═════════════════════════════════════════════════════════════════════════════
+# Wire Manipulator 설정 (robot_control / robot_simul 공용)
 # ─────────────────────────────────────────────────────────────────────────────
-# 조인트 순서 (0~4):
-#   joint0: base_yaw   (revolute,  RobStride03 0x01, CAN0)
-#   joint1: pitch       (revolute,  RobStride03 0x02, CAN0)
-#   joint2: lower_link  (prismatic, MyActuatorX6 0x03, CAN0, ball screw)
-#   joint3: elbow_pitch (revolute,  MyActuatorX6 0x04+0x05, CAN1, wire)
-#   joint4: upper_link  (prismatic, MyActuatorX6 0x06+0x07, CAN1, wire)
+# 조인트 구성 (전역 인덱스 0~4):
+#   joint0: base_yaw    (revolute,  RobStride03  0x01, CAN0)
+#   joint1: pitch       (revolute,  RobStride03  0x02, CAN0)
+#   joint2: lower_link  (prismatic, MyActuatorX6 0x03, CAN0, 볼스크류)
+#   joint3: elbow_pitch (revolute,  MyActuatorX6 0x06+0x07, CAN1, 와이어)
+#   joint4: upper_link  (prismatic, MyActuatorX6 0x04+0x05, CAN1, 와이어)
 #
-# 모터→CAN 버스: m01,m02,m03 → CAN0 / m04,m05,m06,m07 → CAN1
-# 모터 명령 모드(GUI "모터 뷰"): joint IK/와이어 텐션 커플링을 우회하고
-# 물리 모터(m01~m07)에 raw 위치 명령을 직접 전송 (gui/motor_raw_mode)
-# ─────────────────────────────────────────────────────────────────────────────
+# 모터 → CAN 버스: m01,m02,m03 → CAN0  /  m04,m05,m06,m07 → CAN1
+#
+# 와이어 조인트(joint3/4) 모터 역할은 고정: B(0x07/0x05)=위치 제어, A(0x06/0x04)=장력 제어.
+#
+# raw 모드(GUI "모터 뷰", gui/motor_raw_mode): 조인트 IK/와이어 텐션 커플링을 우회하고
+#   물리 모터(m01~m07)에 raw 명령을 직접 전송한다.
+# ═════════════════════════════════════════════════════════════════════════════
 
+# GUI 제어 권한 요청 시 입력하는 비밀번호
 gui/control_password: 1234
 
-# 명령 보간 시간 [s] — GUI에서 보내는 duration을 이 값으로 강제 적용
-# 0.0  : 즉시 이동 (끄떡거림 없음, 권장)
-# 음수 : yaml 무시하고 GUI 값 그대로 사용
-# 양수 : 해당 초만큼 보간 (중력 하중 큰 관절에서 끄떡거림 발생 주의)
+# 명령 보간 시간 [s] — WsBridge가 GUI duration을 이 값으로 강제 적용
+#   0.0  : 즉시 이동 (끄떡거림 없음, 권장)
+#   음수 : yaml 무시하고 GUI가 보낸 duration 값을 그대로 사용
+#   양수 : 해당 초만큼 보간 (중력 하중 큰 관절에서 끄떡거림 주의)
 ws_bridge.default_duration_sec: -1.0
 
-# CAN 포트
+# CAN 포트 이름 (논리 버스 → 실제 SocketCAN 인터페이스)
 can0.port: can2
 can1.port: can1
 
-# 모터 회전 방향 보정 (실 하드웨어용) — 실제 배선/장착 방향에 맞춰 +1 또는 -1.
-# can_bus0.h/can_bus1.h 에서 모터 상태를 읽고 명령을 보낼 때 적용됨.
+# 모터 회전 방향 보정 — 실제 배선/장착 방향에 맞춰 +1 또는 -1.
+# CAN ID 순서(m01~m07)로 인덱싱하며, can_bus0/1 이 상태를 읽고 명령을 보낼 때 적용한다.
 motor_direction_sign:
-- 1.0   # m01: base_yaw   (RobStride03 0x01)
-- 1.0   # m02: pitch      (RobStride03 0x02)
-- 1.0   # m03: lower_link (MyActuatorX6 0x03)
-- 1.0   # m04: elbow A, 장력 (MyActuatorX6 0x04)
-- 1.0   # m05: elbow B, 위치 (MyActuatorX6 0x05)
-- 1.0   # m06: upper A    (MyActuatorX6 0x06)
-- 1.0   # m07: upper B    (MyActuatorX6 0x07)
+- 1.0   # m01: base_yaw       (RobStride03  0x01)
+- 1.0   # m02: pitch          (RobStride03  0x02)
+- 1.0   # m03: lower_link     (MyActuatorX6 0x03)
+- 1.0   # m04: upper_link A, 장력 (MyActuatorX6 0x04)
+- 1.0   # m05: upper_link B, 위치 (MyActuatorX6 0x05)
+- 1.0   # m06: elbow A, 장력     (MyActuatorX6 0x06)
+- 1.0   # m07: elbow B, 위치     (MyActuatorX6 0x07)
 
-# ── MuJoCo 시뮬레이션 ──
+# ── MuJoCo 시뮬레이션 (robot_simul 전용) ──
 mujoco.model_path: mjcf/manipulator.xml
-control_dt: 0.005
-physics_dt: 0.001
-cutoff_freq: 200.0
+control_dt: 0.005     # 제어 주기 [s]
+physics_dt: 0.001     # 물리 적분 주기 [s]
+cutoff_freq: 200.0    # 상태 저역통과 필터 차단주파수 [Hz]
 
-# 중력 보상 — true: qfrc_bias를 피드포워드로 자동 적용 (시뮬레이션용)
-# 실하드웨어에서는 별도 중력 모델 필요
+# 중력 보상 — true: qfrc_bias를 피드포워드로 자동 적용 (시뮬레이션 전용).
+# 실하드웨어에서는 별도 중력 모델이 필요하다.
 gravity_compensation: true
 
 # MJCF 조인트 이름 (index 0~4 가 joint0~joint4 에 대응)
 joints:
 - yaw1    # joint0: base_yaw
-- pitch1  # joint1: shoulder_pitch
+- pitch1  # joint1: pitch
 - pris1   # joint2: lower_link (prismatic)
 - pitch2  # joint3: elbow_pitch
 - pris2   # joint4: upper_link (prismatic)
 
-# PD 제어 게인 (joint0~4)
+# PD 위치 게인 (joint0~4) — 시뮬레이션 제어용
 joint_kp:
 - 100.0   # joint0: base_yaw
 - 100.0   # joint1: pitch
-- 200.0   # joint2: lower_link (ball screw)
-- 80.0    # joint3: elbow_pitch (wire)
-- 80.0    # joint4: upper_link (wire)
+- 200.0   # joint2: lower_link (볼스크류)
+- 80.0    # joint3: elbow_pitch (와이어)
+- 80.0    # joint4: upper_link (와이어)
 
+# PD 속도(댐핑) 게인 (joint0~4)
 joint_kd:
 - 3.0     # joint0: base_yaw
 - 3.0     # joint1: pitch
-- 4.0     # joint2: lower_link (ball screw)
-- 2.5     # joint3: elbow_pitch (wire)
-- 2.5     # joint4: upper_link (wire)
+- 4.0     # joint2: lower_link (볼스크류)
+- 2.5     # joint3: elbow_pitch (와이어)
+- 2.5     # joint4: upper_link (와이어)
 
-# 액추에이터 포화 한계 [Nm / N] — 시뮬레이션에서 토크 클램프에 사용
+# 조인트별 기본 속도 [rad/s 또는 m/s] — MyActuatorX6 위치모드(0xA4)에서 GUI가 velocity를
+# 0으로 보내면 프로토콜상 maxSpeed=0 = "속도제한 없음"으로 해석되어 위험하다. 그래서
+# velocity가 0일 때 이 값으로 대체한다. (joint0/1은 RobStride03라 해당 없음, joint2~4에서만 의미)
+joint_default_speed:
+- 0.0     # joint0: base_yaw (미사용)
+- 0.0     # joint1: pitch (미사용)
+- 0.1     # joint2: lower_link [m/s] — 실측 후 조정
+- 10.0    # joint3: elbow_pitch [rad/s] — 실측 후 조정
+- 0.01    # joint4: upper_link [m/s] — 실측 후 조정
+
+# 액추에이터 포화 한계 [Nm / N] — 시뮬레이션 토크 클램프에 사용
 effort_limits:
 - 100.0   # joint0: base_yaw
 - 100.0   # joint1: pitch
-- 500.0   # joint2: lower_link (ball screw, 선형 힘 [N])
-- 100.0   # joint3: elbow_pitch (wire)
-- 500.0   # joint4: upper_link (wire, 선형 힘 [N])
+- 500.0   # joint2: lower_link (선형 힘 [N])
+- 100.0   # joint3: elbow_pitch (와이어)
+- 500.0   # joint4: upper_link (선형 힘 [N])
 
-# 초기 위치 (joint0~4)
+# 초기 위치 (joint0~4) — 시뮬레이션 시작 자세
 default_joint_positions:
 - 0.0     # joint0: base_yaw [rad]
 - 0.0     # joint1: pitch [rad]
@@ -85,23 +101,22 @@ default_joint_positions:
 - 0.0     # joint4: upper_link [m]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 세이프티 레이어 파라미터
-# 조인트 위치 한계: URDF 기반 (joint0~4)
+# 세이프티 레이어 파라미터 — 한계 위반 시 LOCK 진입, reset 시 RESTORE 후 MANUAL 복귀
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 조인트 위치 하한 [rad / m]
+# 조인트 위치 하한 [rad / m] (URDF 기반)
 safety_layer.joint_pos_limit_lower:
-- -2.094395  # joint0: base_yaw   (±120 deg)
--  0.0       # joint1: pitch      (0 deg, URDF lower limit)
--  0.0       # joint2: lower_link (0 mm)
--  0.0       # joint3: elbow_pitch (0 deg, URDF lower limit)
+- -2.094395  # joint0: base_yaw    (±120 deg)
+-  -0.01     # joint1: pitch       (0 deg, URDF lower limit)
+-  0.0       # joint2: lower_link  (0 mm)
+-  -0.01     # joint3: elbow_pitch (0 deg, URDF lower limit)
 -  0.0       # joint4: upper_link  (0 mm)
 
-# 조인트 위치 상한 [rad / m]
+# 조인트 위치 상한 [rad / m] (URDF 기반)
 safety_layer.joint_pos_limit_upper:
-- 2.094395  # joint0: base_yaw   (±120 deg)
-- 1.570796  # joint1: pitch      (+90 deg)
-- 0.09      # joint2: lower_link (90 mm)
+- 2.094395  # joint0: base_yaw    (±120 deg)
+- 1.570796  # joint1: pitch       (+90 deg)
+- 0.09      # joint2: lower_link  (90 mm)
 - 1.570796  # joint3: elbow_pitch (+90 deg)
 - 0.09      # joint4: upper_link  (90 mm)
 
@@ -114,26 +129,25 @@ safety_layer.joint_torque_limit: 30.0
 # 온도 한계 [°C]
 safety_layer.joint_temp_limit_c: 95.0
 
-# 위치 한계 허용 오차 [rad / m]
-# 시뮬: 0.002 (부동소수점 드리프트 흡수), 실하드웨어: 0.001
+# 위치 한계 허용 오차 [rad / m] — 시뮬: 0.002(부동소수점 드리프트 흡수), 실하드웨어: 0.001
 safety_layer.pos_tolerance: 0.002
 
-# 명령 타임아웃 [s]
+# 명령 타임아웃 [s] — 상위 명령이 이 시간 이상 끊기면 LOCK
 safety_layer.cmd_timeout_sec: 1.0
 
-# 상태 타임아웃 [s]
+# 상태 타임아웃 [s] — 모터 상태가 이 시간 이상 끊기면 LOCK
 safety_layer.state_timeout_sec: 1.0
 
-# 명령 클램프 한계
+# 명령 클램프 한계 — 상위 명령을 SafetyLayer가 이 범위로 잘라서 전달
 safety_layer.cmd_pos_limit: 10.0
 safety_layer.cmd_vel_limit: 30.0
 safety_layer.cmd_torque_limit: 30.0
 safety_layer.cmd_kp_limit: 600.0
 safety_layer.cmd_kd_limit: 5.0
 
-# LOCK 모드 홀드 게인
+# LOCK 모드 홀드 게인 — 현재 위치를 잡아두는 PD 게인
 safety_layer.lock_kp: 100.0
 safety_layer.lock_kd: 3.0
 
-# LOCK → MANUAL 복구 시간 [s]
+# LOCK → MANUAL 복구 보간 시간 [s]
 safety_layer.restore_duration_sec: 10.0

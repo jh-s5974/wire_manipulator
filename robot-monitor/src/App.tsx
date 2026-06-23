@@ -72,6 +72,14 @@ const JOINT_LIMITS: Record<string, JointLimits> = {
 
 const MOTOR_NAMES: string[] = ["joint0", "joint1", "joint2", "joint3", "joint4"];
 
+// 직선(prismatic) 조인트(joint2, joint4)는 GUI 가상 조인트 명령에서 mm 단위로 입력/표시.
+// 백엔드(safety_layer, kin_manipulator, yaml 등)는 그대로 m 단위를 쓰므로,
+// 이 스케일은 GUI 표시/전송 경계에서만 곱하고 나눈다 (다른 코드는 변경 없음).
+// 물리 모터 뷰(모터 명령 모드)는 항상 모터 자체 회전각(rad)이라 이 스케일을 적용하지 않는다.
+function jointPosScale(jointIdx: number): number {
+  return JOINT_LIMITS[`joint${jointIdx}`]?.type === "prismatic" ? 1000 : 1;
+}
+
 // config/robotnl.yaml joint_kp/joint_kd 기본값 — Sync 시 입력칸을 채우는 용도.
 // On 직후엔 실제로 kp=0(무력)이 적용되지만, Sync는 사용자가 바로 Send할 수 있도록
 // 이 기본 게인을 보여준다.
@@ -88,10 +96,10 @@ const PHYS_MOTOR_INFO = [
   { id: 1, name: "m01", label: "base_yaw",       jointIdx: 0 },
   { id: 2, name: "m02", label: "pitch",           jointIdx: 1 },
   { id: 3, name: "m03", label: "lower_link",      jointIdx: 2 },
-  { id: 4, name: "m04", label: "elbow_A (장력)",  jointIdx: 3 },
-  { id: 5, name: "m05", label: "elbow_B (위치)",  jointIdx: 3 },
-  { id: 6, name: "m06", label: "upper_A",         jointIdx: 4 },
-  { id: 7, name: "m07", label: "upper_B",         jointIdx: 4 },
+  { id: 4, name: "m04", label: "upper_A",         jointIdx: 4 },
+  { id: 5, name: "m05", label: "upper_B",         jointIdx: 4 },
+  { id: 6, name: "m06", label: "elbow_A (장력)",  jointIdx: 3 },
+  { id: 7, name: "m07", label: "elbow_B (위치)",  jointIdx: 3 },
 ] as const;
 
 const NON_CONTROLLABLE_MOTOR_NAMES = new Set<string>();
@@ -328,9 +336,12 @@ const TimeSeriesPlot = React.memo(function TimeSeriesPlot({
 });
 
 function makeInitialCommand(m: MotorState): MotorCommandFields {
+  const scale = jointPosScale(m.id);
+  const pos = m.command_position ?? m.position;
+  const vel = m.command_velocity ?? m.velocity;
   return {
-    position: formatCommandValue(m.command_position ?? m.position, "position", "0.00"),
-    velocity: formatCommandValue(m.command_velocity ?? m.velocity, "velocity", "0.00"),
+    position: formatCommandValue(pos !== undefined ? pos * scale : pos, "position", "0.00"),
+    velocity: formatCommandValue(vel !== undefined ? vel * scale : vel, "velocity", "0.00"),
     torque: formatCommandValue(m.command_torque ?? m.torque, "torque", "0.00"),
     kp:
       m.command_kp !== undefined
@@ -371,19 +382,23 @@ function JointLimitsTable() {
             </tr>
           </thead>
           <tbody>
-            {Object.entries(JOINT_LIMITS).map(([name, lim]) => (
-              <tr key={name}>
-                <td><strong>{name}</strong></td>
-                <td>{lim.type}</td>
-                <td>{lim.unit}</td>
-                <td className="num">{lim.lower.toFixed(4)}</td>
-                <td className="num">{lim.upper.toFixed(4)}</td>
-                <td className="num">{lim.velMax}</td>
-                <td className="num">{lim.effortMax}</td>
-                <td className="num">{lim.kpMax}</td>
-                <td className="num">{lim.kdMax}</td>
-              </tr>
-            ))}
+            {Object.entries(JOINT_LIMITS).map(([name, lim]) => {
+              const scale = lim.type === "prismatic" ? 1000 : 1;
+              const unit = lim.type === "prismatic" ? "mm" : lim.unit;
+              return (
+                <tr key={name}>
+                  <td><strong>{name}</strong></td>
+                  <td>{lim.type}</td>
+                  <td>{unit}</td>
+                  <td className="num">{(lim.lower * scale).toFixed(4)}</td>
+                  <td className="num">{(lim.upper * scale).toFixed(4)}</td>
+                  <td className="num">{lim.velMax * scale}</td>
+                  <td className="num">{lim.effortMax}</td>
+                  <td className="num">{lim.kpMax}</td>
+                  <td className="num">{lim.kdMax}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -417,8 +432,11 @@ interface MotorStatusRowProps {
 
 const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inactive, showIo }: MotorStatusRowProps) {
   const limits = motor.name ? JOINT_LIMITS[motor.name] : undefined;
+  // 직선 조인트(joint2/4)는 m → mm로 표시 (명령 입력칸과 단위 통일)
+  const posScale = limits?.type === "prismatic" ? 1000 : 1;
   const renderNum = (v: number | undefined, d = 3) =>
     hasData && typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "N/A";
+  const scaleVal = (v: number | undefined) => (v === undefined ? undefined : v * posScale);
   const currentKp = motor.driver_command_kp;
   const currentKd = motor.driver_command_kd;
   const renderCommandPair = (
@@ -460,14 +478,14 @@ const MotorStatusRow = React.memo(function MotorStatusRow({ motor, hasData, inac
           title={hasData ? motor.mode : "N/A"}
         />
       </td>
-      {renderCommandPair(motor.position, motor.driver_command_position, limits ? {
-        min: limits.lower,
-        max: limits.upper,
+      {renderCommandPair(scaleVal(motor.position), scaleVal(motor.driver_command_position), limits ? {
+        min: limits.lower * posScale,
+        max: limits.upper * posScale,
         color: "#3b82f6",
       } : undefined)}
-      {renderCommandPair(motor.velocity, motor.driver_command_velocity, limits ? {
-        min: -limits.velMax,
-        max: limits.velMax,
+      {renderCommandPair(scaleVal(motor.velocity), scaleVal(motor.driver_command_velocity), limits ? {
+        min: -limits.velMax * posScale,
+        max: limits.velMax * posScale,
         color: "#8b5cf6",
       } : undefined)}
       {renderCommandPair(motor.torque, motor.driver_command_torque, limits ? {
@@ -522,6 +540,10 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
   inactive,
 }: MotorCommandRowProps) {
   const limits: JointLimits | undefined = motor.name ? JOINT_LIMITS[motor.name] : undefined;
+  // 직선 조인트(joint2/4)는 위치/속도를 mm, mm/s로 표시 — cmd 값 자체가 이미 mm 단위로 들어있으므로
+  // 바(슬라이더) 표시 범위(limits)만 같은 배율로 맞춰준다.
+  const posScale = limits?.type === "prismatic" ? 1000 : 1;
+  const posUnit = limits?.type === "prismatic" ? "mm" : "rad";
 
   const handleFieldChange =
     (field: keyof MotorCommandFields) =>
@@ -580,8 +602,9 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           value={cmd.position}
           onChange={handleFieldChange("position")}
           disabled={!canControl}
+          title={limits ? `단위: ${posUnit}` : undefined}
         />
-        {limits && renderCmdBar("position", cmd.position, limits.lower, limits.upper, "#3b82f6", !canControl, 2)}
+        {limits && renderCmdBar("position", cmd.position, limits.lower * posScale, limits.upper * posScale, "#3b82f6", !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
@@ -589,8 +612,9 @@ const MotorCommandRow = React.memo(function MotorCommandRow({
           value={cmd.velocity}
           onChange={handleFieldChange("velocity")}
           disabled={!canControl}
+          title={limits ? `단위: ${posUnit}/s` : undefined}
         />
-        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax, limits.velMax, "#8b5cf6", !canControl, 2)}
+        {limits && renderCmdBar("velocity", cmd.velocity, -limits.velMax * posScale, limits.velMax * posScale, "#8b5cf6", !canControl, 2)}
       </td>
       <td className="stat-cell">
         <input
@@ -927,6 +951,12 @@ function App() {
     return v;
   };
 
+  // GUI에 mm 단위로 입력된 직선 조인트 position/velocity를 백엔드 단위(m)로 변환
+  const parsePosForJoint = (s: string, jointIdx: number): number | undefined => {
+    const v = parseNumberOrUndefined(s);
+    return v === undefined ? undefined : v / jointPosScale(jointIdx);
+  };
+
   const handleMotorCommandChange = React.useCallback((motorId: number, next: MotorCommandFields) => {
     setMotorCommands((prev) => ({
       ...prev,
@@ -940,13 +970,15 @@ function App() {
       const motor = state.motors.find((m) => m.id === motorId);
       if (!motor) return;
       const gains = DEFAULT_JOINT_GAINS[motor.id];
+      const scale = jointPosScale(motor.id);
       setMotorCommands((prev) => ({
         ...prev,
         [motor.id]: {
           ...(prev[motor.id] ?? makeInitialCommand(motor)),
           // Sync: 명령값이 아니라 모터의 실제 현재 상태(피드백)를 입력칸에 채운다
-          position: formatCommandValue(motor.position, "position", prev[motor.id]?.position ?? "0.00"),
-          velocity: formatCommandValue(motor.velocity, "velocity", prev[motor.id]?.velocity ?? "0.00"),
+          // (직선 조인트는 mm 단위로 표시)
+          position: formatCommandValue(motor.position * scale, "position", prev[motor.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(motor.velocity * scale, "velocity", prev[motor.id]?.velocity ?? "0.00"),
           torque: formatCommandValue(motor.torque, "torque", prev[motor.id]?.torque ?? "0.00"),
           // kp/kd는 센서 피드백이 없으므로 현재 적용 중인 명령값을 사용, 없으면 yaml 기본값
           kp: formatCommandValue(motor.command_kp ?? motor.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
@@ -1003,8 +1035,8 @@ function App() {
       if (!cmd) return;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
       sendMotorCommand(motorId, {
-        position: parseNumberOrUndefined(cmd.position),
-        velocity: parseNumberOrUndefined(cmd.velocity),
+        position: parsePosForJoint(cmd.position, motorId),
+        velocity: parsePosForJoint(cmd.velocity, motorId),
         torque: parseNumberOrUndefined(cmd.torque),
         kp: parseNumberOrUndefined(cmd.kp),
         kd: parseNumberOrUndefined(cmd.kd),
@@ -1169,8 +1201,8 @@ function App() {
       if (!motor || !isMotorControlEnabled(motor.name)) continue;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
       sendMotorCommand(motorId, {
-        position: parseNumberOrUndefined(cmd.position),
-        velocity: parseNumberOrUndefined(cmd.velocity),
+        position: parsePosForJoint(cmd.position, motorId),
+        velocity: parsePosForJoint(cmd.velocity, motorId),
         torque:   parseNumberOrUndefined(cmd.torque),
         kp:       parseNumberOrUndefined(cmd.kp),
         kd:       parseNumberOrUndefined(cmd.kd),
@@ -1189,11 +1221,12 @@ function App() {
       for (const m of state.motors) {
         if (!isMotorControlEnabled(m.name)) continue;
         const gains = DEFAULT_JOINT_GAINS[m.id];
+        const scale = jointPosScale(m.id);
         next[m.id] = {
           ...(next[m.id] ?? makeInitialCommand(m)),
-          // Sync: 명령값이 아니라 모터의 실제 현재 상태(피드백)를 입력칸에 채운다
-          position: formatCommandValue(m.position, "position", next[m.id]?.position ?? "0.00"),
-          velocity: formatCommandValue(m.velocity, "velocity", next[m.id]?.velocity ?? "0.00"),
+          // Sync: 명령값이 아니라 모터의 실제 현재 상태(피드백)를 입력칸에 채운다 (직선 조인트는 mm)
+          position: formatCommandValue(m.position * scale, "position", next[m.id]?.position ?? "0.00"),
+          velocity: formatCommandValue(m.velocity * scale, "velocity", next[m.id]?.velocity ?? "0.00"),
           torque: formatCommandValue(m.torque, "torque", next[m.id]?.torque ?? "0.00"),
           kp: formatCommandValue(m.command_kp ?? m.kp, "kp", gains ? gains.kp.toFixed(1) : "0.0"),
           kd: formatCommandValue(m.command_kd ?? m.kd, "kd", gains ? gains.kd.toFixed(1) : "0.0"),
@@ -1222,7 +1255,24 @@ function App() {
   };
 
   // 각 row에 입력된 값 기준으로 전 모터 Send (각각 메시지 전송)
+  // 조인트 뷰: motorCommands(가상 조인트 5개) / 모터 뷰: physMotorCommands(물리 모터 7개)
   const handleAllSend = () => {
+    if (!showJointView) {
+      for (const info of PHYS_MOTOR_INFO) {
+        const cmd = physMotorCommands[info.id];
+        if (!cmd) continue;
+        const durationSec = parseNumberOrUndefined(cmd.durationMs);
+        sendPhysMotorCommand(info.id, {
+          position: parseNumberOrUndefined(cmd.position),
+          velocity: parseNumberOrUndefined(cmd.velocity),
+          torque: parseNumberOrUndefined(cmd.torque),
+          kp: parseNumberOrUndefined(cmd.kp),
+          kd: parseNumberOrUndefined(cmd.kd),
+          duration_ms: durationSec !== undefined && durationSec > 0 ? durationSec * 1000 : 0,
+        });
+      }
+      return;
+    }
     if (!state) return;
     for (const m of state.motors) {
       if (!isMotorControlEnabled(m.name)) continue;
@@ -1230,8 +1280,8 @@ function App() {
       if (!cmd) continue;
       const durationSec = parseNumberOrUndefined(cmd.durationMs);
       sendMotorCommand(m.id, {
-        position: parseNumberOrUndefined(cmd.position),
-        velocity: parseNumberOrUndefined(cmd.velocity),
+        position: parsePosForJoint(cmd.position, m.id),
+        velocity: parsePosForJoint(cmd.velocity, m.id),
         torque: parseNumberOrUndefined(cmd.torque),
         kp: parseNumberOrUndefined(cmd.kp),
         kd: parseNumberOrUndefined(cmd.kd),

@@ -5,12 +5,16 @@
 #include <linux/can.h>
 #include <arpa/inet.h> // ntohs 사용을 위해 추가
 #include <cmath>
+#include <algorithm>
 
 
 
 // --- 공통 데이터 구조체 ---
 struct MotorCommand {
     double pos = 0.0, vel = 0.0, torque = 0.0, kp = 0.0, kd = 0.0;
+    // true: 위치제어(절대위치+속도제한 명령, 멀티턴 가능) / false: MIT 토크·위치혼합 모드(±한정 범위)
+    // MyActuatorX6에서만 의미가 있음 — kp>0 이면 자동으로 true (send_motor_cmd에서 설정)
+    bool position_mode = false;
 };
 
 struct MotorState {
@@ -45,6 +49,12 @@ public:
     virtual bool packStop(struct can_frame* frame) = 0;
     virtual bool parseFeedback(const struct can_frame* frame) = 0;
     virtual bool isMyFrame(const struct can_frame* frame) = 0;
+    // Control() 직후 추가로 보낼 조회 프레임이 있는 모터(예: 위치모드 정밀 각도 조회)를 위한 훅. 기본은 no-op.
+    // 반환값: 보낼 프레임이 없으면(no-op) true, 보냈다면 write() 성공 여부
+    virtual bool RequestExtra(int /*so*/) { return true; }
+    // state.pos가 신뢰 가능한 절대위치인지 — 기본은 항상 true(RobStride 등 단일 응답으로 충분한 모터),
+    // MyActuatorX6는 0x92 절대위치 응답을 받기 전까지 false (windowed MIT 값으로 잘못 동기화 방지)
+    virtual bool hasValidPosition() const { return true; }
     void Start(int so, bool dummy=false) {
         struct can_frame frame;
         if (packStart(&frame))
@@ -55,10 +65,11 @@ public:
             Control(so, cmd);
         }
     }
-    void Control(int so, const MotorCommand& cmd) {
+    // 반환값: 실제로 8바이트 전부 write() 성공했는지 — CAN TX 버퍼 과부하로 드랍되면 false
+    bool Control(int so, const MotorCommand& cmd) {
         struct can_frame frame;
-        if (packControl(&frame, cmd))
-            auto res = write(so, &frame, sizeof(frame));
+        if (!packControl(&frame, cmd)) return false;
+        return write(so, &frame, sizeof(frame)) == (ssize_t)sizeof(frame);
     }
     void Stop(int so) {
         struct can_frame frame;
@@ -208,39 +219,36 @@ public:
 };
 
 // ==========================================================
-// [MyActuator X6 구현체 (MIT cheetah protocol)]
-// X6-8: 8:1 reduction, ±18 Nm peak, ±30 rad/s (output)
-// CAN: TX 0x400+id (standard frame), RX 0x500+id (standard frame)
+// [MyActuator X6 구현체] — 전부 Private 프로토콜(0x140+ID TX / 0x240+ID RX), MIT 모션모드는 미사용
+// X6-8 데이터시트 실측: 8:1 reduction, 정격토크 4.5 Nm, 피크토크 8 Nm, 정격전류 3.6A, 정격속도 310rpm
+//
+// 명령의 kp 값으로 모드를 자동 전환한다 (MotorCommand::position_mode, send_motor_cmd()에서
+// kp>0이면 true로 설정):
+//
+//   [position_mode=true]  절대위치 폐루프 제어 (0xA4) — angleControl int32(0.01°/LSB)라
+//                          멀티턴 전체 범위를 그대로 표현 가능. maxSpeed로 속도제한.
+//   [position_mode=false] 토크(전류) 폐루프 제어 (0xA1) — iqControl int16(0.01A/LSB).
+//                          MotorCommand::torque 값을 단위 변환 없이 그대로 전류[A]로 사용한다
+//                          (Nm↔A 추정 변환은 실측 전이라 부정확하므로 사용하지 않음 — 호출부에서
+//                          torque 필드에 원하는 전류[A]를 직접 넣을 것).
+//
+// 0xA1/0xA4 응답은 완전히 같은 구조(DATA[0]=echo, D1=temp, D2-3=iq(0.01A), D4-5=speed(1dps),
+// D6-7=angle(1°/LSB)) — 같은 분기로 처리한다.
+// 위치(state.pos)는 0x92 응답(Read Multi-Turn Angle, int32 0.01°/LSB)에서만 갱신한다.
+// A1/A4 응답의 D6-7(1°/LSB)은 속도·전류 확인에는 충분하나 위치 정밀도가 낮아 사용하지 않는다.
+// 0x92는 4모터를 라운드로빈으로 1대씩 조회(can_bus1/can_bus0에서 처리) — 동시 충돌 방지.
 // ==========================================================
 class MyActuatorX6 : public Motor {
 public:
     MyActuatorX6(uint32_t _id) { id = _id; }
 
     bool packStart(struct can_frame* frame) override {
-        // MyActuator X6 MIT protocol: send zero-torque command to activate
+        // 활성화용 — 토크 0인 0xA1 프레임을 보냄 (전용 enable 명령이 프로토콜에 없음)
         return packControl(frame, MotorCommand{});
     }
 
     bool packControl(struct can_frame* frame, const MotorCommand& cmd) override {
-        memset(frame, 0, sizeof(struct can_frame));
-        frame->can_id  = 0x400 + id;
-        frame->can_dlc = 8;
-
-        uint16_t p_des = float_to_uint(cmd.pos,    -12.5f, 12.5f, 16);
-        uint16_t v_des = float_to_uint(cmd.vel,    -30.0f, 30.0f, 12);
-        uint16_t kp    = float_to_uint(cmd.kp,       0.0f, 500.0f, 12);
-        uint16_t kd    = float_to_uint(cmd.kd,       0.0f,   5.0f, 12);
-        uint16_t t_ff  = float_to_uint(cmd.torque, -18.0f,  18.0f, 12);
-
-        frame->data[0] = p_des >> 8;
-        frame->data[1] = p_des & 0xFF;
-        frame->data[2] = v_des >> 4;
-        frame->data[3] = ((v_des & 0xF) << 4) | (kp >> 8);
-        frame->data[4] = kp & 0xFF;
-        frame->data[5] = kd >> 4;
-        frame->data[6] = ((kd & 0xF) << 4) | (t_ff >> 8);
-        frame->data[7] = t_ff & 0xFF;
-        return true;
+        return cmd.position_mode ? packPositionControl(frame, cmd) : packTorqueControl(frame, cmd);
     }
 
     bool packStop(struct can_frame* frame) override {
@@ -252,21 +260,96 @@ public:
     }
 
     bool parseFeedback(const struct can_frame* frame) override {
-        if (frame->can_id != (0x500 + id)) return false;
-        uint16_t p_int = ((uint16_t)frame->data[1] << 8) | frame->data[2];
-        uint16_t v_int = ((uint16_t)frame->data[3] << 4) | (frame->data[4] >> 4);
-        uint16_t t_int = (((uint16_t)frame->data[4] & 0xF) << 8) | frame->data[5];
+        if (frame->can_id != (0x240 + id)) return false;
 
-        state.pos    = uint_to_float(p_int, -12.5f, 12.5f, 16);
-        state.vel    = uint_to_float(v_int, -30.0f, 30.0f, 12);
-        state.torque = uint_to_float(t_int, -18.0f, 18.0f, 12);
-        state.online = true;
-        return true;
+        if (frame->data[0] == 0xA1 || frame->data[0] == 0xA4) {
+            // 프로토콜 V4.4: D1=temp, D2-3=iq(0.01A/LSB), D4-5=speed(1dps/LSB), D6-7=angle(1°/LSB)
+            // 위치(state.pos)는 0x92 응답에서만 갱신 — A1/A4는 속도·전류만 사용
+            int16_t iq_raw    = (int16_t)(((uint16_t)frame->data[3] << 8) | frame->data[2]);
+            int16_t speed_dps = (int16_t)(((uint16_t)frame->data[5] << 8) | frame->data[4]);
+            state.torque = iq_raw * 0.01;
+            state.vel    = speed_dps * (M_PI / 180.0);
+            state.online = true;
+            return true;
+        }
+        if (frame->data[0] == 0x92) {
+            // Read Multi-Turn Angle 응답: D4-7=int32, 0.01°/LSB (멀티턴 절대 위치, 유일한 위치 소스)
+            int32_t raw = (int32_t)((uint32_t)frame->data[4] | ((uint32_t)frame->data[5] << 8) |
+                                    ((uint32_t)frame->data[6] << 16) | ((uint32_t)frame->data[7] << 24));
+            state.pos    = (raw * 0.01) * (M_PI / 180.0);
+            state.online = true;
+            pos_valid_   = true;
+            return true;
+        }
+        return false;
     }
 
     bool isMyFrame(const struct can_frame* frame) override {
         if (frame->can_id & CAN_EFF_FLAG) return false;
-        return frame->can_id == (0x500 + id);
+        return frame->can_id == (0x240 + id);
+    }
+
+    // 0x92 절대위치 응답을 한 번이라도 받아야 sync 허용
+    // 0x92는 모터별 라운드로빈(1모터/사이클)으로 전송 → 4모터 동시 응답 충돌 방지
+    bool hasValidPosition() const override { return pos_valid_; }
+
+    // Control() 직후 항상 0.01° 정밀 위치를 별도로 조회 (모드 무관)
+    bool RequestExtra(int so) override {
+        struct can_frame frame{};
+        if (!packReadAngle(&frame)) return false;
+        return write(so, &frame, sizeof(frame)) == (ssize_t)sizeof(frame);
+    }
+
+private:
+    bool pos_valid_ = false; // 0x92 절대위치 응답을 한 번이라도 받았는지
+
+    // 토크(전류) 폐루프 제어 (0xA1)
+    bool packTorqueControl(struct can_frame* frame, const MotorCommand& cmd) {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+
+        const int16_t iq_control = (int16_t)std::lround(cmd.torque * 100.0); // torque[A] 그대로 0.01A/LSB
+
+        frame->data[0] = 0xA1;
+        frame->data[1] = 0x00;
+        frame->data[2] = 0x00;
+        frame->data[3] = 0x00;
+        frame->data[4] = (uint8_t)(iq_control & 0xFF);
+        frame->data[5] = (uint8_t)((iq_control >> 8) & 0xFF);
+        frame->data[6] = 0x00;
+        frame->data[7] = 0x00;
+        return true;
+    }
+
+    // 절대위치 폐루프 제어 (0xA4) — 멀티턴 위치 + 속도제한, kp/kd 없음 (펌웨어 내장 PI)
+    bool packPositionControl(struct can_frame* frame, const MotorCommand& cmd) {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+
+        const int32_t angle_control = (int32_t)std::lround(cmd.pos * (180.0 / M_PI) * 100.0); // 0.01°/LSB
+        const double  max_speed_dps = std::min(std::abs(cmd.vel) * (180.0 / M_PI), 65535.0);
+        const uint16_t max_speed    = (uint16_t)max_speed_dps; // 1dps/LSB, 0 = 속도제한 없음(PI 결과 그대로)
+
+        frame->data[0] = 0xA4;
+        frame->data[1] = 0x00;
+        frame->data[2] = (uint8_t)(max_speed & 0xFF);
+        frame->data[3] = (uint8_t)((max_speed >> 8) & 0xFF);
+        frame->data[4] = (uint8_t)(angle_control & 0xFF);
+        frame->data[5] = (uint8_t)((angle_control >> 8) & 0xFF);
+        frame->data[6] = (uint8_t)((angle_control >> 16) & 0xFF);
+        frame->data[7] = (uint8_t)((angle_control >> 24) & 0xFF);
+        return true;
+    }
+
+    // Read Multi-Turn Angle (0x92) — 조회 전용, 응답은 parseFeedback에서 처리
+    bool packReadAngle(struct can_frame* frame) {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+        frame->data[0] = 0x92;
+        return true;
     }
 };
 
