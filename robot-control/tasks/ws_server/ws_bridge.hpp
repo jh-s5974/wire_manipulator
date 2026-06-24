@@ -224,6 +224,12 @@ struct Event {
         MotorCommand cmd;
     };
 
+    // 물리 모터(m01~m07, 1-based) 영점 설정 — 현재 위치를 기계 영점(0)으로 저장
+    struct PhysSetZeroPayload {
+        bool is_all = false;
+        int motor_id = -1; // 1-based (m01=1 ... m07=7)
+    };
+
     // GUI 뷰 모드 전환 (조인트 뷰 ↔ 모터 뷰) → 백엔드 제어 경로 전환
     struct ViewModePayload {
         std::string mode; // "joint" | "motor"
@@ -244,6 +250,7 @@ struct Event {
         DataLogger,
         PhysMotorPower,
         PhysMotorCommand,
+        PhysMotorSetZero,
         ViewMode,
         RosMode
     } kind;
@@ -259,6 +266,7 @@ struct Event {
     DataLoggerPayload data_logger;
     PhysPowerPayload phys_power;
     PhysCommandPayload phys_command;
+    PhysSetZeroPayload phys_set_zero;
     ViewModePayload view_mode;
     RosModePayload ros_mode;
 };
@@ -670,6 +678,22 @@ private:
                 ev.phys_command.cmd.kp          = get_opt("kp");
                 ev.phys_command.cmd.kd          = get_opt("kd");
                 ev.phys_command.cmd.duration_ms = c.value("duration_ms", 0.0);
+            }
+            else if (type == "phys_motor_set_zero") {
+                ev.kind = Event::Kind::PhysMotorSetZero;
+
+                if (!payload.contains("motorId")) {
+                    std::cout << "[WS] phys_motor_set_zero missing motorId\n";
+                    return;
+                }
+
+                if (payload["motorId"].is_string() &&
+                    payload["motorId"].get<std::string>() == "all") {
+                    ev.phys_set_zero.is_all = true;
+                } else {
+                    ev.phys_set_zero.is_all = false;
+                    ev.phys_set_zero.motor_id = payload["motorId"].get<int>();
+                }
             }
             else if (type == "view_mode") {
                 ev.kind = Event::Kind::ViewMode;

@@ -84,6 +84,13 @@ private:
         "gui/phys_motor/m05/on", "gui/phys_motor/m06/on",
         "gui/phys_motor/m07/on",
     };
+    // 영점 설정 트리거 — CanBus0/1이 구독해 해당 물리 모터의 현재 위치를 0점으로 저장한다(one-shot).
+    static constexpr const char* kPhysSetZeroChannels[kPhysCount] = {
+        "gui/phys_motor/m01/set_zero", "gui/phys_motor/m02/set_zero",
+        "gui/phys_motor/m03/set_zero", "gui/phys_motor/m04/set_zero",
+        "gui/phys_motor/m05/set_zero", "gui/phys_motor/m06/set_zero",
+        "gui/phys_motor/m07/set_zero",
+    };
 
     struct JointIo {
         const char* name;
@@ -193,6 +200,16 @@ private:
         DataWriter<bool>{kPhysOnChannels[4]},
         DataWriter<bool>{kPhysOnChannels[5]},
         DataWriter<bool>{kPhysOnChannels[6]},
+    };
+    // 영점 설정 트리거(one-shot) — CanBus0/1이 구독
+    DataWriter<rt::Signal> dw_phys_set_zero_[kPhysCount] = {
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[0]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[1]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[2]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[3]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[4]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[5]},
+        DataWriter<rt::Signal>{kPhysSetZeroChannels[6]},
     };
     // 모터 명령 모드 전역 플래그 — true: CanBus0/1이 조인트 IK를 우회하고 phys_motor cmd를 직접 적용
     DataWriter<bool> dw_motor_raw_mode_{"gui/motor_raw_mode"};
@@ -412,6 +429,9 @@ private:
             case wsbridge::Event::Kind::PhysMotorCommand:
                 handle_phys_motor_command(ev.phys_command);
                 break;
+            case wsbridge::Event::Kind::PhysMotorSetZero:
+                handle_phys_set_zero(ev.phys_set_zero);
+                break;
             case wsbridge::Event::Kind::ViewMode:
                 handle_view_mode(ev.view_mode);
                 break;
@@ -521,6 +541,22 @@ private:
         };
         if (cmd.is_all) for (int i = 0; i < kPhysCount; i++) apply(i);
         else apply(cmd.motor_id - 1);
+    }
+
+    // 물리 모터(m01~m07, 1-based) 영점 설정 — 현재 위치를 0점으로 저장하라는 one-shot 신호.
+    // 실제 적용(및 모터 ON 상태 거부 등 안전 처리)은 CanBus0/1에서 한다.
+    void handle_phys_set_zero(const wsbridge::Event::PhysSetZeroPayload& sz) {
+        if (!control_granted_) {
+            getLogger()->warn("[{}] phys set_zero ignored: not granted", getName());
+            return;
+        }
+        auto fire = [&](int idx /*0-based*/) {
+            if (idx < 0 || idx >= kPhysCount) return;
+            dw_phys_set_zero_[idx].write();
+            getLogger()->info("[{}] phys motor m{:02d} set_zero 요청", getName(), idx + 1);
+        };
+        if (sz.is_all) for (int i = 0; i < kPhysCount; i++) fire(i);
+        else fire(sz.motor_id - 1);
     }
 
     // GUI 뷰 모드 전환 → CanBus0/1 제어 경로 전환 (joint IK ↔ phys_motor 직접 명령)

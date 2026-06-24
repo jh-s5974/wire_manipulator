@@ -11,9 +11,10 @@
 // 물리 모터 배치 (motors[] 배열은 "joint 그룹 순서" — CAN ID 오름차순이 아님에 주의):
 //   motors[0] = 0x06 → joint3 와이어 A : 장력(토크) 제어 (고정)
 //   motors[1] = 0x07 → joint3 와이어 B : 위치 제어 (고정)
-//   motors[2] = 0x04 → joint4 와이어 A : 장력(토크) 제어 (고정)
-//   motors[3] = 0x05 → joint4 와이어 B : 위치 제어 (고정)
-//   → 두 조인트 모두 B 모터(0x07/0x05)가 위치, A 모터(0x06/0x04)가 장력. 방향에 따라 안 바뀐다.
+//   motors[2] = 0x04 → joint4 m04 : 길이 기준 모터. 길어질 때 위치제어 / 줄어들 때 장력
+//   motors[3] = 0x05 → joint4 m05 :              줄어들 때 위치제어 / 길어질 때 장력
+//   → joint3 은 역할 고정(B=위치, A=장력). joint4 는 이동 방향에 따라 m04↔m05 역할 교대
+//     (목표>현재 길어짐→m04 위치, 목표<현재 줄어듦→m05 위치). 길이 FK 는 항상 m04 기준.
 //
 // 이 파일 내부의 가상 조인트 인덱스(ji): ji=0 → joint3,  ji=1 → joint4.
 //
@@ -124,6 +125,20 @@ public:
                 phys_cmd_cache_[mi].kd     = data.kd;
             });
             dr_phys_on_[mi].on_update([&, mi](const bool& on) { phys_on_flag_[mi] = on; });
+
+            // 영점 설정 트리거(one-shot) — 모터가 OFF 일 때만 허용(ON 상태에서 0점을 바꾸면
+            // 현재 명령이 새 0점 기준으로 재해석되어 급격히 움직일 수 있다). 시퀀스 진행은 아래 송신부.
+            dr_set_zero_[mi].on_update([&, mi]() {
+                if (effective_on_[mi]) {
+                    getLogger()->warn("[{}] Motor[{}] (0x{:02X}) 영점 무시: 모터 ON 상태 (먼저 OFF 하세요)",
+                                      getName(), mi, motors[mi]->id);
+                    return;
+                }
+                if (zero_step_[mi] == 0) {
+                    zero_step_[mi] = 1;
+                    getLogger()->info("[{}] Motor[{}] (0x{:02X}) 영점 설정 시작", getName(), mi, motors[mi]->id);
+                }
+            });
         }
 
         if (so > 0) {
@@ -212,6 +227,10 @@ public:
                 // 조인트 모드: IK → 물리 모터 명령 송신 (호스트 인터폴레이션 없음)
                 send_motor_commands(tick);
             }
+
+            // 영점 설정 시퀀스(모터별) — zero_step_>0인 모터만 동작. send_motor_cmd 는 zero_step_>0이면
+            // 일반 제어 프레임을 보내지 않으므로(아래 가드), 해당 모터엔 영점/리셋 프레임만 나간다.
+            for (int mi = 0; mi < NM; mi++) run_zero_sequence(mi);
 
             // 0x92 위치조회: 4대 제어명령 전송 완료 후 라운드로빈으로 1대씩 전송
             // A4/A1 제어명령 직후 0x92를 같은 모터에 보내면 펌웨어가 0x92를 무시함
@@ -310,8 +329,8 @@ private:
         switch (ji) {
             case 0: // joint3: 위치 모터 B(0x07, motors[1]) 기준
                 return kin_manip::joint3_motor_to_joint(mpos(1), motor03_pos_);
-            case 1: // joint4: 위치 모터 B(0x05, motors[3]) 기준
-                return kin_manip::joint4_motor_to_joint(mpos(3), motor03_pos_);
+            case 1: // joint4: 길이 기준 모터 m04(0x04, motors[2]) — 위치/장력 역할과 무관하게 길이 반영
+                return kin_manip::joint4_motor4_to_joint(mpos(2), motor03_pos_);
             default: return 0.0;
         }
     }
@@ -320,7 +339,7 @@ private:
     double compute_joint_vel_fk(int ji) const {
         switch (ji) {
             case 0: return kin_manip::joint3_vel_motor_to_joint(mvel(1)); // 0x07
-            case 1: return kin_manip::joint4_vel_motor_to_joint(mvel(3)); // 0x05
+            case 1: return kin_manip::joint4_vel_motor4_to_joint(mvel(2)); // 0x04 (길이 기준 모터)
             default: return 0.0;
         }
     }
@@ -329,7 +348,8 @@ private:
     double compute_joint_torque_fk(int ji) const {
         switch (ji) {
             case 0: return kin_manip::joint3_torque_motor_to_joint(mtorque(1)); // 0x07
-            case 1: return kin_manip::joint4_torque_motor_to_joint(mtorque(3)); // 0x05
+            // joint4: 길이 기준 모터 m04 의 토크로 근사(장력 역할일 땐 ~일정). 표시용 추정치.
+            case 1: return kin_manip::joint4_torque_motor4_to_joint(mtorque(2)); // 0x04
             default: return 0.0;
         }
     }
@@ -384,6 +404,7 @@ private:
                 // 오프라인 or 준비 안 됨 → 두 모터 모두 영(0) 명령으로 안전하게 정지
                 for (int mi : joint_motors(ji))
                     send_motor_cmd(mi, MotorCommand{});
+                if (ji == 1) j4_active_pos_motor_ = -1; // 다음 ready 때 현재 위치 기준 재결정
                 continue;
             }
 
@@ -435,33 +456,71 @@ private:
                 send_motor_cmd(1, mc_b);
                 break;
             }
-            case 1: { // joint4: 상단링크 와이어 IK (모터 역할 고정, 방향 무관)
-                // motor A (0x04, motors[2]): 항상 장력 제어 — kp=kd=0, torque=tension
-                // motor B (0x05, motors[3]): 항상 위치 제어 — lower_link 커플링 보정 포함
-                // 위치 모터도 0xA4 위치모드라 velocity=0이면 "속도제한 없음"이 되어 위험 —
-                // GUI가 안 줬으면 yaml 기본값(joint_default_speed[4])으로 대체
+            case 1: { // joint4: 상단링크 와이어 IK — 이동 방향에 따라 위치/장력 모터 역할 교대
+                // 방향(어느 모터가 위치제어냐)은 '직전 조인트 명령'을 기준으로 정한다 (모터 상태값 X):
+                //   목표>직전명령 : 길어져야 함 → m04(0x04) 위치, m05(0x05) 장력
+                //   목표<직전명령 : 줄어들어야 함 → m05 위치, m04 장력
+                // 모터 상태(FK)로 판단하면 장력제어 모터가 예상보다 더/덜 움직였을 때 방향을 오판하므로
+                // 명령 기준으로 바꿨다(첫 명령만 예외로 측정 길이 사용 — 아래 결정 로직 참조).
+                // 데드밴드(UPPER_DIR_DEADBAND) 이내 미세 명령 변화로는 역할을 안 바꾼다(히스테리시스).
+                // 위치 모터는 0xA4 위치모드라 velocity=0이면 "속도제한 없음"이 되어 위험 —
+                // GUI가 안 줬으면 yaml 기본값(joint_default_speed[4])으로 대체.
                 double vel4 = cmd.vel;
                 if (vel4 == 0.0) {
                     const auto& def_speed = p_default_speed.read();
                     if ((int)def_speed.size() > 4) vel4 = def_speed[4];
                 }
 
-                MotorCommand mc_b{}; // 위치 제어 (0x05, motors[3])
-                mc_b.pos    = kin_manip::joint4_joint_to_motor_pos(cmd.pos, motor03_pos_);
-                mc_b.vel    = kin_manip::joint4_vel_joint_to_motor(vel4);
-                mc_b.torque = kin_manip::joint4_torque_joint_to_motor(cmd.torque);
-                mc_b.kp     = cmd.kp;
-                mc_b.kd     = cmd.kd;
+                const double L_tgt = cmd.pos;
 
-                MotorCommand mc_a{}; // 장력 제어 (0x04, motors[2])
-                mc_a.pos    = mpos(2);
-                mc_a.vel    = 0.0;
-                mc_a.torque = kin_manip::UPPER_TENSION_TORQUE;
-                mc_a.kp     = 0.0;
-                mc_a.kd     = 0.0;
+                // ── 위치제어(능동) 모터 선택: 2=m04(길어짐), 3=m05(줄어듦) ──
+                // 기준은 '직전 조인트 명령 길이'(j4_prev_cmd_len_). 토크제어 중인 반대편 모터가
+                // 예상보다 더/덜 돌아 측정 각도(FK)가 틀어져도, 명령 기준이라 방향을 오판하지 않는다.
+                //   목표 > 직전명령 → 길어짐 → m04 위치 / 목표 < 직전명령 → 줄어듦 → m05 위치.
+                // 명령 이력이 없을 때(첫 명령/재동기화 직후, active==-1)만 막 동기화된 실제 길이(FK)로
+                // 첫 방향을 정한다(이때는 토크제어 누적이 없어 측정값을 신뢰할 수 있다).
+                int active = j4_active_pos_motor_;
+                if (active != 2 && active != 3) {
+                    // 첫 결정: 측정 길이(FK) 기준
+                    const double L_cur = kin_manip::joint4_motor4_to_joint(mpos(2), motor03_pos_);
+                    active = (L_tgt - L_cur >= 0.0) ? 2 : 3; // 동률→m04(길어짐)
+                    j4_prev_cmd_len_ = L_tgt;
+                } else {
+                    // 이후: 직전 '명령' 기준. 데드밴드 이상 바뀐 경우에만 역할·기준 갱신.
+                    const double err = L_tgt - j4_prev_cmd_len_;
+                    if (err >  UPPER_DIR_DEADBAND)      { active = 2; j4_prev_cmd_len_ = L_tgt; } // 길어짐→m04
+                    else if (err < -UPPER_DIR_DEADBAND) { active = 3; j4_prev_cmd_len_ = L_tgt; } // 줄어듦→m05
+                    // 데드밴드 내: 직전 역할·기준 그대로 유지(채터링 방지)
+                }
+                j4_active_pos_motor_ = active;
 
-                send_motor_cmd(2, mc_a);
-                send_motor_cmd(3, mc_b);
+                // 장력 모터 명령(공통) — pos 는 현재값 hold, 순수 토크(kp=kd=0).
+                // +UPPER_TENSION_TORQUE 는 각 모터의 '능동(와이어 감기)' 방향으로 당겨 와이어를
+                // 팽팽히 유지한다(motor_direction_sign 이 +=능동방향이 되도록 보정돼 있다는 전제).
+                MotorCommand mc_ten{};
+                mc_ten.vel = 0.0; mc_ten.torque = kin_manip::UPPER_TENSION_TORQUE;
+                mc_ten.kp = 0.0;  mc_ten.kd = 0.0;
+
+                MotorCommand mc_pos{};
+                mc_pos.kp = cmd.kp; mc_pos.kd = cmd.kd;
+
+                if (active == 2) {
+                    // 길어짐: m04(2) 위치, m05(3) 장력
+                    mc_pos.pos    = kin_manip::joint4_joint_to_motor4_pos(L_tgt, motor03_pos_);
+                    mc_pos.vel    = kin_manip::joint4_vel_joint_to_motor4(vel4);
+                    mc_pos.torque = kin_manip::joint4_torque_joint_to_motor4(cmd.torque);
+                    mc_ten.pos    = mpos(3);
+                    send_motor_cmd(2, mc_pos);
+                    send_motor_cmd(3, mc_ten);
+                } else {
+                    // 줄어듦: m05(3) 위치, m04(2) 장력
+                    mc_pos.pos    = kin_manip::joint4_joint_to_motor_pos(L_tgt, motor03_pos_);
+                    mc_pos.vel    = kin_manip::joint4_vel_joint_to_motor(vel4);
+                    mc_pos.torque = kin_manip::joint4_torque_joint_to_motor(cmd.torque);
+                    mc_ten.pos    = mpos(2);
+                    send_motor_cmd(3, mc_pos);
+                    send_motor_cmd(2, mc_ten);
+                }
                 break;
             }
         }
@@ -516,6 +575,16 @@ private:
     double motor03_pos_ = 0.0;
     bool   motor03_synced_ = false; // CanBus0로부터 m03 raw 위치를 한 번이라도 받았는지
 
+    // joint4 방향별 위치/장력 역할 교대 상태
+    //   현재 위치 제어를 맡은 모터 인덱스(2=m04 길어짐, 3=m05 줄어듦). -1=미결정(다음 ready 때 결정)
+    int j4_active_pos_motor_ = -1;
+    // 방향 결정 기준이 되는 '직전 joint4 명령 길이'[m]. active==-1(첫 명령)일 때 FK로 초기화되고,
+    // 이후 데드밴드 이상 명령이 바뀔 때마다 갱신된다. (모터 측정값이 아니라 명령 이력을 기준으로 함)
+    double j4_prev_cmd_len_ = 0.0;
+    // '명령'이 이 값 이상 바뀌어야 위치/장력 역할을 교대한다(미세 변화 채터링 방지) [m].
+    // 의도한 최소 이동(사용자 예: 1mm)보다 작아야 그 이동이 방향 전환을 일으킨다.
+    static constexpr double UPPER_DIR_DEADBAND = 0.0002; // 0.2mm
+
     // ── 모터 명령 모드 (IK 우회, 모터 공간 직접 명령) ──
     DataReader<bool> dr_motor_raw_mode_{"gui/motor_raw_mode", DependencyType::Weak};
     DataReader<custom_types::MotorCmd> dr_phys_cmd_[NM] = {
@@ -529,6 +598,13 @@ private:
         DataReader<bool>{"gui/phys_motor/m07/on", DependencyType::Weak},
         DataReader<bool>{"gui/phys_motor/m04/on", DependencyType::Weak},
         DataReader<bool>{"gui/phys_motor/m05/on", DependencyType::Weak},
+    };
+    // 영점 설정 트리거(one-shot) — 인덱스 = motors[] 순서 (m06, m07, m04, m05; CAN ID 순서 아님!)
+    DataReader<rt::Signal> dr_set_zero_[NM] = {
+        DataReader<rt::Signal>{"gui/phys_motor/m06/set_zero", DependencyType::Weak},
+        DataReader<rt::Signal>{"gui/phys_motor/m07/set_zero", DependencyType::Weak},
+        DataReader<rt::Signal>{"gui/phys_motor/m04/set_zero", DependencyType::Weak},
+        DataReader<rt::Signal>{"gui/phys_motor/m05/set_zero", DependencyType::Weak},
     };
 
     Parameter<std::string> p_port{"can1.port", "can1"};
@@ -558,6 +634,7 @@ private:
     bool   phys_on_flag_[NM]  = {}; // gui/phys_motor/m0X/on 캐시
     bool   effective_on_[NM]  = {}; // 현 모드 기준 실제 적용된 on 상태
     bool   motor_sync_[NM]    = {};
+    int    zero_step_[NM]     = {}; // 영점 설정 진행 상태(0=대기, >0=시퀀스 진행 카운터)
     uint64_t exec_tick_ = 0; // 0x92 라운드로빈 스태거링에 사용
     int    cmd_wdt[NJ]        = {};
     int    phys_cmd_wdt_[NM]  = {};
@@ -579,8 +656,29 @@ private:
     double   rx_hz_[NM]         = {};
     std::chrono::steady_clock::time_point io_window_start_ = std::chrono::steady_clock::now();
 
+    // 영점 설정 시퀀스(모터별 상태머신). 60Hz 기준 step 1에서 영점 저장 프레임(0x64)을 보내고,
+    // ROM 기록이 안정되도록 ~100ms 뒤 리셋(0x76)을 보낸다(can_bus1 은 전부 MyActuatorX6).
+    // 완료 시 motor_sync_=false 로 강제 재동기화 — 0점 기준이 바뀌었으니 현재 위치로 명령을 재시드한다.
+    static constexpr int kZeroResetStep = 7;  // step 1(0x64) 후 ~100ms 뒤 0x76
+    static constexpr int kZeroDoneStep  = 9;  // 시퀀스 종료
+    void run_zero_sequence(int mi) {
+        if (zero_step_[mi] == 0) return;
+        if (zero_step_[mi] == 1) {
+            if (motors[mi]->SetZero(so)) { tx_count_[mi]++; getLogger()->info("[{}] Motor[{}] (0x{:02X}) SetZero 프레임 전송", getName(), mi, motors[mi]->id); }
+            else getLogger()->warn("[{}] Motor[{}] SetZero 미지원/전송 실패", getName(), mi);
+        } else if (zero_step_[mi] == kZeroResetStep) {
+            if (motors[mi]->Reset(so)) { tx_count_[mi]++; getLogger()->info("[{}] Motor[{}] (0x{:02X}) Reset(재시작) 프레임 전송", getName(), mi, motors[mi]->id); }
+        }
+        if (++zero_step_[mi] > kZeroDoneStep) {
+            zero_step_[mi] = 0;
+            motor_sync_[mi] = false; // 0점 기준 변경 → 온라인+유효위치 복귀 시 현재 위치로 재시드
+            getLogger()->info("[{}] Motor[{}] (0x{:02X}) 영점 설정 완료", getName(), mi, motors[mi]->id);
+        }
+    }
+
     // cmd는 모터 공간(raw) 기준 — 모터로 보내기 직전 motor_sign_ 으로 되돌림
     void send_motor_cmd(int mi, const MotorCommand& cmd) {
+        if (zero_step_[mi] > 0) return; // 영점 시퀀스 중에는 일반 제어 프레임을 보내지 않음
         custom_types::MotorCmd echo{};
         echo.pos = cmd.pos; echo.vel = cmd.vel; echo.torque = cmd.torque; echo.kp = cmd.kp; echo.kd = cmd.kd;
         dw_phys_cmd_applied_[mi].write(echo);

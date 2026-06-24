@@ -17,6 +17,7 @@
 #include <rtfw/task.h>
 #include "custom_types.hpp"
 #include "util.hpp"
+#include "kin_manipulator.hpp"  // 세이프티 위치검사에서 lower_link 커플링 제거용
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,7 @@ struct SafetyLayerState {
     std::array<bool, SL_N> motor_state_online{};
     std::array<uint64_t, SL_N> manager_cmd_tick{};
     std::array<uint64_t, SL_N> motor_state_tick{};
+    double   motor03_pos_        = 0.0; // lower_link(0x03) raw 위치 — joint3/4 커플링 제거용
     SLMode   mode                = SL_MANUAL;
     uint64_t restore_enter_tick  = 0;
 };
@@ -71,6 +73,11 @@ public:
                     dw_mtr_cmd[i].write(clamp_cmd(cmd));
                 }
             }
+        });
+
+        // lower_link(0x03) raw 위치 캐시 — joint3/4 위치검사에서 커플링 항을 제거하는 데 사용
+        dr_motor03_state_.on_update([&](const custom_types::MotorState& d) {
+            s.motor03_pos_ = d.pos;
         });
 
         // Manager 명령 수신
@@ -142,6 +149,8 @@ private:
         DataReader<custom_types::MotorState>{"joint3/state", DependencyType::Weak},
         DataReader<custom_types::MotorState>{"joint4/state", DependencyType::Weak},
     };
+    // lower_link(0x03) raw 위치 — joint3/4 위치검사의 커플링 항 제거용 (CanBus0 발행)
+    DataReader<custom_types::MotorState> dr_motor03_state_{"phys_motor/m03/state", DependencyType::Weak};
     DataWriter<custom_types::MotorCmd> dw_mtr_cmd[SL_N] = {
         DataWriter<custom_types::MotorCmd>{"joint0/cmd"},
         DataWriter<custom_types::MotorCmd>{"joint1/cmd"},
@@ -249,7 +258,10 @@ private:
             }
 
             // 위치 한계 (tolerance 만큼 여유 허용)
-            double pos = s.motor_state[i].pos;
+            // joint3/4 는 FK 에 lower_link 커플링이 섞여 있어, lower_link 만 움직여도 위치값이
+            // 한계를 침범할 수 있다. 한계 검사에서는 커플링 항을 제거(위치모터 단독값)하고 본다.
+            double pos = kin_manip::pos_without_lower_coupling(
+                             i, s.motor_state[i].pos, s.motor03_pos_);
             if ((int)pos_lo.size() > i && (int)pos_hi.size() > i) {
                 const double tol = p_pos_tolerance.read();
                 if (pos < pos_lo[i] - tol || pos > pos_hi[i] + tol) {

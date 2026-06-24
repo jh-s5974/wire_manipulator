@@ -55,6 +55,12 @@ public:
     // state.pos가 신뢰 가능한 절대위치인지 — 기본은 항상 true(RobStride 등 단일 응답으로 충분한 모터),
     // MyActuatorX6는 0x92 절대위치 응답을 받기 전까지 false (windowed MIT 값으로 잘못 동기화 방지)
     virtual bool hasValidPosition() const { return true; }
+    // 현재 위치를 기계 영점으로 저장하는 프레임. 지원하지 않으면 false(no-op).
+    //   RobStride03: type6(즉시 적용) / MyActuatorX6: 0x64(ROM 기록 → packReset 후 적용)
+    virtual bool packSetZero(struct can_frame* /*frame*/) { return false; }
+    // 영점 저장 후 적용을 위해 모터를 재시작하는 프레임. 필요 없으면 false(no-op).
+    //   MyActuatorX6: 0x76(시스템 리셋). RobStride03 는 즉시 적용이라 불필요.
+    virtual bool packReset(struct can_frame* /*frame*/) { return false; }
     void Start(int so, bool dummy=false) {
         struct can_frame frame;
         if (packStart(&frame))
@@ -75,6 +81,18 @@ public:
         struct can_frame frame;
         if (packStop(&frame))
             auto res = write(so, &frame, sizeof(frame));
+    }
+    // 현재 위치를 영점으로 저장 — packSetZero 가 false(미지원)면 아무것도 안 하고 false 반환
+    bool SetZero(int so) {
+        struct can_frame frame;
+        if (!packSetZero(&frame)) return false;
+        return write(so, &frame, sizeof(frame)) == (ssize_t)sizeof(frame);
+    }
+    // 모터 재시작(영점 적용용) — packReset 이 false(불필요)면 아무것도 안 하고 false 반환
+    bool Reset(int so) {
+        struct can_frame frame;
+        if (!packReset(&frame)) return false;
+        return write(so, &frame, sizeof(frame)) == (ssize_t)sizeof(frame);
     }
 };
 
@@ -186,7 +204,26 @@ public:
         return true;
     }
 
-    bool parseFeedback(const struct can_frame* frame) override {        
+    // 현재 위치를 기계 영점으로 저장 (통신 타입 6) — reset/stop(비활성) 상태에서 호출, 즉시 적용됨.
+    // 확장 ID 0x0600FD0X, data[0]=1. (cansend 0600FD0X#01.. 과 동일)
+    bool packSetZero(struct can_frame* frame) override {
+        memset(frame, 0, sizeof(struct can_frame));
+        RobStrideHeader h = {0};
+        RobStrideData d = {0};
+
+        h.type6.typecode  = 0x06;
+        h.type6.main_id   = 0xFD;
+        h.type6.target_id = id;
+
+        d.type6.set_zero = 1; // Byte[0]=1 : 현재 위치를 0점으로 설정
+
+        frame->can_id = h.raw | CAN_EFF_FLAG;
+        frame->can_dlc = 8;
+        *(uint64_t*)frame->data = d.raw64;
+        return true;
+    }
+
+    bool parseFeedback(const struct can_frame* frame) override {
         RobStrideHeader h = {0};
         RobStrideData d = {0};
         
@@ -256,6 +293,25 @@ public:
         frame->can_id  = 0x140 + id;
         frame->can_dlc = 8;
         frame->data[0] = 0x80; // shutdown
+        return true;
+    }
+
+    // 현재 멀티턴 위치를 모터 영점으로 ROM 에 기록 (0x64). ROM 기록이라 적용은 재시작(packReset 0x76)
+    // 또는 전원 재투입 후에 이뤄진다. (cansend 140+ID#64.. 과 동일)
+    bool packSetZero(struct can_frame* frame) override {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+        frame->data[0] = 0x64; // Write current multi-turn position to ROM as motor zero
+        return true;
+    }
+
+    // 시스템 리셋 (0x76) — 0x64 로 기록한 영점을 적용하기 위해 모터를 재시작한다(~1s 오프라인).
+    bool packReset(struct can_frame* frame) override {
+        memset(frame, 0, sizeof(struct can_frame));
+        frame->can_id  = 0x140 + id;
+        frame->can_dlc = 8;
+        frame->data[0] = 0x76; // System reset
         return true;
     }
 

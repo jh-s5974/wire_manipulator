@@ -82,6 +82,16 @@ export function useRobotWs({
     sendRaw(msg);
   };
 
+  // 물리 모터 영점 설정 — 현재 위치를 기계 영점(0)으로 저장. 백엔드는 모터 OFF 상태에서만 적용.
+  const sendPhysMotorSetZero = (motorId: number | "all") => {
+    const msg: BaseMessage<{ motorId: number | "all" }> = {
+      type: "phys_motor_set_zero",
+      timestamp: Date.now(),
+      payload: { motorId },
+    };
+    sendRaw(msg);
+  };
+
   const sendPhysMotorCommand = (
     motorId: number | "all",
     cmd: {
@@ -379,6 +389,7 @@ export function useRobotWs({
     sendMotorCommand,
     sendPhysMotorPower,
     sendPhysMotorCommand,
+    sendPhysMotorSetZero,
     sendViewMode,
     sendRosMode,
     sendMotorControlRequest,

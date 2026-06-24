@@ -746,6 +746,7 @@ function App() {
     sendMotorCommand,
     sendPhysMotorPower,
     sendPhysMotorCommand,
+    sendPhysMotorSetZero,
     sendViewMode,
     sendRosMode,
     sendMotorControlRequest,
@@ -1143,6 +1144,18 @@ function App() {
       sendPhysMotorPower(physMotorId, !(physMotor.enabled ?? false));
     },
     [displayPhysMotors, sendPhysMotorPower],
+  );
+
+  // 물리 모터 영점 설정 — 현재 위치를 기계 영점(0)으로 저장. 백엔드는 모터 OFF 상태에서만 적용한다.
+  // 영점이 바뀌면 위치 기준이 통째로 이동하므로, 실수 방지를 위해 한 번 더 확인한다.
+  const handlePhysMotorSetZeroById = React.useCallback(
+    (physMotorId: number) => {
+      const info = PHYS_MOTOR_INFO.find((m) => m.id === physMotorId);
+      const label = info ? `${info.name} (${info.label})` : `모터 ${physMotorId}`;
+      if (!window.confirm(`${label} 의 현재 위치를 영점(0)으로 설정합니다.\n모터가 꺼져 있어야 적용됩니다. 진행할까요?`)) return;
+      sendPhysMotorSetZero(physMotorId);
+    },
+    [sendPhysMotorSetZero],
   );
 
   // === 선택 / 일괄 입력 ===
@@ -2092,6 +2105,40 @@ function App() {
             <div className="bottom-row">
               <JointLimitsTable />
               <Ros2CmdTable cmd={state?.ros2_cmd} />
+            </div>
+
+            {/* 영점 설정 카드 — 각 물리 모터(m01~m07)의 현재 위치를 기계 영점(0)으로 저장.
+                안전을 위해 해당 모터가 OFF + 제어 권한이 있을 때만 활성화된다. */}
+            <div className="card card-zeroset">
+              <div className="card-header">
+                <h3>영점 설정 (Set Zero)</h3>
+                <span className="limits-note">현재 위치 → 0점 · 모터 OFF 상태에서만</span>
+              </div>
+              <div className="zero-set-grid">
+                {PHYS_MOTOR_INFO.map((info) => {
+                  const pm = displayPhysMotors.find((m) => m.id === info.id);
+                  const isOn = pm?.enabled ?? false;
+                  const disabled = !canControl || isOn;
+                  return (
+                    <button
+                      key={info.id}
+                      className="btn btn-outline zero-set-btn"
+                      onClick={() => handlePhysMotorSetZeroById(info.id)}
+                      disabled={disabled}
+                      title={
+                        !canControl
+                          ? "제어 권한이 필요합니다"
+                          : isOn
+                            ? "모터를 먼저 끄세요 (OFF)"
+                            : `${info.name} 현재 위치를 영점(0)으로 저장`
+                      }
+                    >
+                      <span className="zero-set-name">{info.name}</span>
+                      <span className="zero-set-label">{info.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {showPlot && (

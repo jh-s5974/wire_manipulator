@@ -818,6 +818,49 @@ body {
   margin-left: 8px;
 }
 
+/* ── 영점 설정 카드 ── */
+
+.card-zeroset {
+  width: 100%;
+  max-width: 1100px;
+}
+
+.zero-set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.zero-set-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border-color: #f59e0b;
+  color: #b45309;
+}
+
+.zero-set-btn:hover:not(:disabled) {
+  background: #fffbeb;
+  border-color: #d97706;
+}
+
+.zero-set-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.zero-set-label {
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.zero-set-btn:disabled .zero-set-label {
+  color: inherit;
+}
+
 /* ── Record 버튼 ── */
 
 .record-group {

@@ -40,7 +40,7 @@ motor_direction_sign:
 - 1.0   # m01: base_yaw       (RobStride03  0x01)
 - 1.0   # m02: pitch          (RobStride03  0x02)
 - 1.0   # m03: lower_link     (MyActuatorX6 0x03)
-- 1.0   # m04: upper_link A, 장력 (MyActuatorX6 0x04)
+- -1.0  # m04: upper_link, 길이기준 (MyActuatorX6 0x04) — 회전방향 반전
 - 1.0   # m05: upper_link B, 위치 (MyActuatorX6 0x05)
 - 1.0   # m06: elbow A, 장력     (MyActuatorX6 0x06)
 - 1.0   # m07: elbow B, 위치     (MyActuatorX6 0x07)
@@ -86,7 +86,7 @@ joint_default_speed:
 - 0.0     # joint0: base_yaw (미사용)
 - 0.0     # joint1: pitch (미사용)
 - 0.1     # joint2: lower_link [m/s] — 실측 후 조정
-- 10.0    # joint3: elbow_pitch [rad/s] — 실측 후 조정
+- 1.0    # joint3: elbow_pitch [rad/s] — 실측 후 조정
 - 0.01    # joint4: upper_link [m/s] — 실측 후 조정
 
 # 액추에이터 포화 한계 [Nm / N] — 시뮬레이션 토크 클램프에 사용

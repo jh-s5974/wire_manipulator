@@ -150,6 +150,19 @@ public:
             });
 
             dr_phys_on_[i].on_update([&, i](const bool& on) { phys_on_flag_[i] = on; });
+
+            // 영점 설정 트리거(one-shot) — 모터가 OFF 일 때만 허용(ON 상태에서 0점을 바꾸면
+            // 현재 명령이 새 0점 기준으로 재해석되어 급격히 움직일 수 있다). 시퀀스 진행은 아래 송신부.
+            dr_set_zero_[i].on_update([&, i]() {
+                if (effective_on_[i]) {
+                    getLogger()->warn("[{}] Motor {} 영점 무시: 모터 ON 상태 (먼저 OFF 하세요)", getName(), i);
+                    return;
+                }
+                if (zero_step_[i] == 0) {
+                    zero_step_[i] = 1;
+                    getLogger()->info("[{}] Motor {} 영점 설정 시작", getName(), i);
+                }
+            });
         }
 
         if (so > 0) {
@@ -303,6 +316,10 @@ public:
                 send_motor_cmd(i, applied); // 모터 방향 보정은 send_motor_cmd 내부에서 처리
             }
 
+            // 영점 설정 시퀀스(모터별) — zero_step_>0인 모터만 동작. send_motor_cmd 는 zero_step_>0이면
+            // 일반 제어 프레임을 보내지 않으므로(아래 가드), 해당 모터엔 영점/리셋 프레임만 나간다.
+            for (int i = 0; i < N; i++) run_zero_sequence(i);
+
             // 0x92 위치조회: N대 제어명령 전송 완료 후 라운드로빈으로 1대씩 전송.
             // A4 제어명령 직후 0x92를 같은 모터에 보내면 펌웨어가 무시하므로, 제어 프레임들
             // 뒤로 분리해 간격을 확보한다. RobStride(0x01/0x02)의 RequestExtra는 no-op이라
@@ -432,6 +449,12 @@ private:
         DataReader<bool>{"gui/phys_motor/m02/on", DependencyType::Weak},
         DataReader<bool>{"gui/phys_motor/m03/on", DependencyType::Weak},
     };
+    // 영점 설정 트리거(one-shot) — 인덱스 = motors[] 순서 (m01, m02, m03)
+    DataReader<rt::Signal> dr_set_zero_[N] = {
+        DataReader<rt::Signal>{"gui/phys_motor/m01/set_zero", DependencyType::Weak},
+        DataReader<rt::Signal>{"gui/phys_motor/m02/set_zero", DependencyType::Weak},
+        DataReader<rt::Signal>{"gui/phys_motor/m03/set_zero", DependencyType::Weak},
+    };
 
     Parameter<std::string> p_port{"can0.port", "can0"};
     // 모터 방향 보정 (m01, m02, m03) — 실제 배선/장착에 맞춰 +1/-1
@@ -479,8 +502,34 @@ private:
     double   rx_hz_[N]         = {};
     std::chrono::steady_clock::time_point io_window_start_ = std::chrono::steady_clock::now();
 
+    // 영점 설정 진행 상태(모터별). 0=대기, >0=시퀀스 진행 카운터(send_motor_cmd 억제).
+    int zero_step_[N] = {};
+
+    // 영점 설정 시퀀스(모터별 상태머신). 60Hz 기준 step 1에서 영점 저장 프레임을 보내고,
+    // MyActuatorX6는 ROM 기록이 안정되도록 ~100ms 뒤 리셋(0x76)을 보낸다(RobStride는 즉시 적용이라 no-op).
+    // 완료 시 motor_sync_=false 로 강제 재동기화 — 0점 기준이 바뀌었으니 캐시된 명령을 재시드해야 한다.
+    static constexpr int kZeroResetStep = 7;  // step 1(0x64) 후 ~100ms 뒤 0x76
+    static constexpr int kZeroDoneStep  = 9;  // 시퀀스 종료
+    void run_zero_sequence(int i) {
+        if (zero_step_[i] == 0) return;
+        if (zero_step_[i] == 1) {
+            if (motors[i]->SetZero(so)) { tx_count_[i]++; getLogger()->info("[{}] Motor {} SetZero 프레임 전송", getName(), i); }
+            else getLogger()->warn("[{}] Motor {} SetZero 미지원/전송 실패", getName(), i);
+        } else if (zero_step_[i] == kZeroResetStep) {
+            if (motors[i]->Reset(so)) { tx_count_[i]++; getLogger()->info("[{}] Motor {} Reset(재시작) 프레임 전송", getName(), i); }
+        }
+        if (++zero_step_[i] > kZeroDoneStep) {
+            zero_step_[i] = 0;
+            motor_sync_[i]      = false; // 0점 기준 변경 → 재동기화(명령 재시드)
+            cmd_interp[i]       = {};
+            phys_cmd_interp_[i] = {};
+            getLogger()->info("[{}] Motor {} 영점 설정 완료", getName(), i);
+        }
+    }
+
     // cmd는 모터 공간(raw) 기준 — 모터로 보내기 직전 motor_sign_ 으로 되돌림
     void send_motor_cmd(int i, const MotorCommand& cmd) {
+        if (zero_step_[i] > 0) return; // 영점 시퀀스 중에는 일반 제어 프레임을 보내지 않음
         custom_types::MotorCmd echo{};
         echo.pos = cmd.pos; echo.vel = cmd.vel; echo.torque = cmd.torque; echo.kp = cmd.kp; echo.kd = cmd.kd;
         dw_phys_cmd_applied_[i].write(echo);
