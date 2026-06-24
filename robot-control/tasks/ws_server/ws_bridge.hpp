@@ -97,6 +97,13 @@ struct BridgeState {
     std::vector<MotorSnapshot> physical_motors; // 7개 물리 모터 raw 상태
     ImuSnapshot imu;
     std::unordered_map<std::string, double> joint_states;
+
+    // ROS2 /joint_command 로 들어온 5개 조인트 목표값 (GUI 표시용)
+    // 표시 단위: deg,deg,mm,deg,mm. online=한 번이라도 수신했는지, values=미수신 시 빈 벡터.
+    struct Ros2CmdSnapshot {
+        bool online = false;
+        std::vector<double> values;
+    } ros2_cmd;
 };
 
 // JSON 직렬화 (BridgeState -> JSON)
@@ -152,7 +159,8 @@ inline void to_json(json& j, const BridgeState& s) {
         {"motors", s.motors},
         {"physical_motors", s.physical_motors},
         {"imu", s.imu},
-        {"joint_states", s.joint_states}
+        {"joint_states", s.joint_states},
+        {"ros2_cmd", {{"online", s.ros2_cmd.online}, {"values", s.ros2_cmd.values}}}
     };
 }
 
@@ -221,6 +229,11 @@ struct Event {
         std::string mode; // "joint" | "motor"
     };
 
+    // ROS 명령 모드 토글 → Manager 가 조인트 명령 소스를 GUI ↔ ROS2 로 전환
+    struct RosModePayload {
+        bool enabled = false;
+    };
+
     enum class Kind {
         SubscribeState,
         MotorPower,
@@ -231,7 +244,8 @@ struct Event {
         DataLogger,
         PhysMotorPower,
         PhysMotorCommand,
-        ViewMode
+        ViewMode,
+        RosMode
     } kind;
 
     std::int64_t timestamp_ms = 0;
@@ -246,6 +260,7 @@ struct Event {
     PhysPowerPayload phys_power;
     PhysCommandPayload phys_command;
     ViewModePayload view_mode;
+    RosModePayload ros_mode;
 };
 
 } // namespace wsbridge
@@ -659,6 +674,10 @@ private:
             else if (type == "view_mode") {
                 ev.kind = Event::Kind::ViewMode;
                 ev.view_mode.mode = payload.value("mode", std::string("joint"));
+            }
+            else if (type == "ros_mode") {
+                ev.kind = Event::Kind::RosMode;
+                ev.ros_mode.enabled = payload.value("enabled", false);
             }
             else {
                 std::cout << "[WS] unknown type: " << type << "\n";

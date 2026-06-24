@@ -113,6 +113,16 @@ export function useRobotWs({
     sendRaw(msg);
   };
 
+  // ROS 명령 모드 토글 — 백엔드 Manager가 조인트 명령 소스를 GUI ↔ ROS2 로 전환
+  const sendRosMode = (enabled: boolean) => {
+    const msg: BaseMessage<{ enabled: boolean }> = {
+      type: "ros_mode",
+      timestamp: Date.now(),
+      payload: { enabled },
+    };
+    sendRaw(msg);
+  };
+
   const sendMotorControlRequest = (request = true) => {
     const msg: BaseMessage<{ request: boolean }> = {
       type: "motor_control_request",
@@ -370,6 +380,7 @@ export function useRobotWs({
     sendPhysMotorPower,
     sendPhysMotorCommand,
     sendViewMode,
+    sendRosMode,
     sendMotorControlRequest,
     sendRobotModeRequest,
     sendSafetyReset,

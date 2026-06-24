@@ -25,6 +25,11 @@ gui/control_password: 1234
 #   양수 : 해당 초만큼 보간 (중력 하중 큰 관절에서 끄떡거림 주의)
 ws_bridge.default_duration_sec: -1.0
 
+# ROS2 /joint_command 보간 시간 [s] — ROS 메시지엔 duration이 없으므로 이 값으로 보간한다.
+#   GUI 기본값(1.0s)과 동일하게 두면 GUI 명령과 똑같이 부드럽게 이동한다.
+#   0.0 이하로 두면 즉시 이동(점프) → 큰 위치 변화 시 토크 폭주/세이프티 LOCK 위험.
+ros2_bridge.default_duration_sec: 1.0
+
 # CAN 포트 이름 (논리 버스 → 실제 SocketCAN 인터페이스)
 can0.port: can2
 can1.port: can1

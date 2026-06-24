@@ -79,9 +79,8 @@ inline double joint2_force_joint_to_motor(double joint_N) {
 // 아래 FK/IK 함수는 위치 제어 모터(B, 0x07) 기준이다. 장력 모터(A)는 변환 대상이 아니다.
 // ═══════════════════════════════════════════════════════════════════
 
-// [TEST] 링크 미연결 1:1 테스트 중 — 실제 와이어 연결 후 3.92*0.928로, 커플링도 -4.0/90.0로 복원할 것.
-static constexpr double ELBOW_RATIO          = 1.6;  // [motor_B_rad / joint3_rad] (원래값: 3.92 * 0.928)
-static constexpr double ELBOW_LOWER_COUPLING = 0.0;  // [motor_B_rad / motor_03_rad] (원래값: -4.0 / 90.0)
+static constexpr double ELBOW_RATIO          = 1.6;  // [motor_B_rad / joint3_rad]
+static constexpr double ELBOW_LOWER_COUPLING = 0.0;  // [motor_B_rad / motor_03_rad]
 static constexpr double ELBOW_TENSION_TORQUE = 0.2;  // [Nm] 장력 모터(A) 토크 — 실측 후 튜닝 필요
 
 // FK: 위치 모터 B(0x07) 각도 + lower_link 커플링 보정 → 팔꿈치 각도 [rad]
@@ -125,7 +124,7 @@ inline double joint3_torque_motor_to_joint(double motor_Nm) { return motor_Nm * 
 //   (40/20): 모터풀리/아이들러풀리, (28/48): 작은타이밍풀리/큰타이밍풀리, 2.8: 큰기어:작은기어
 static constexpr double UPPER_RATIO          =
     (2.0 * M_PI) / (0.004 * (40.0 / 20.0) * (28.0 / 48.0) * 2.8);
-static constexpr double UPPER_LOWER_COUPLING = 0.0;  // [motor_rad / motor_03_rad] (원래값: -5.8 / 90.0, 미측정)
+static constexpr double UPPER_LOWER_COUPLING = 0.0;  // [motor_rad / motor_03_rad]
 static constexpr double UPPER_TENSION_TORQUE = 0.2;  // [Nm] 장력 모터(A) 토크 — 실측 후 튜닝 필요
 
 // FK: 위치 모터 B(0x05) 각도 + lower_link 커플링 보정 → 상단링크 길이 [m]

@@ -86,6 +86,11 @@ export interface StatePayload {
   imu: ImuState;
   // 로봇에서 직접 보내는 조인트 상태 (URDF 조인트명: 라디안)
   joint_states?: { [jointName: string]: number };
+  // ROS2 /joint_command 로 들어온 5개 조인트 목표값 (표시 단위: deg,deg,mm,deg,mm)
+  ros2_cmd?: {
+    online: boolean;
+    values: number[];
+  };
 }
 
 export interface BaseMessage<T = unknown> {

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FastDDS UDP 전용 프로파일.
+
+  목적: robot_control 은 CAN/RT 때문에 sudo(root)로 실행되는데, FastDDS 기본
+  공유메모리(SHM) 전송은 /dev/shm 세그먼트가 생성 프로세스의 UID 소유라서
+  root 구독자 ↔ 일반 사용자 publisher 간에 데이터가 오가지 않는다(rx=0).
+  (디스커버리는 UDP 멀티캐스트라 UID 무관 → topic info/hz 는 보이지만 콜백은 안 옴.)
+
+  이 프로파일은 내장 전송(SHM 포함)을 끄고 UDPv4 만 사용하게 해서 UID 경계를
+  넘어 통신하게 한다. 5개 float @ 10Hz 라 UDP 루프백 오버헤드는 무시 가능.
+
+  적용: FASTRTPS_DEFAULT_PROFILES_FILE 환경변수로 지정 (run_control.sh 가 자동 export).
+  robot_control(구독자)이 UDP 로케이터만 광고하므로, publisher 는 기본 설정 그대로
+  두어도 자동으로 UDP 로 보낸다(이 파일을 publisher 에 적용할 필요 없음).
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <transport_descriptors>
+            <transport_descriptor>
+                <transport_id>udp_only_transport</transport_id>
+                <type>UDPv4</type>
+            </transport_descriptor>
+        </transport_descriptors>
+
+        <participant profile_name="udp_only_participant" is_default_profile="true">
+            <rtps>
+                <userTransports>
+                    <transport_id>udp_only_transport</transport_id>
+                </userTransports>
+                <!-- 내장 전송(SHM/UDP 자동) 비활성화 → 위 UDPv4 만 사용 -->
+                <useBuiltinTransports>false</useBuiltinTransports>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>

@@ -20,6 +20,11 @@
 #include "tasks/ws_server/ws_bridge_task.hpp"
 #include "tasks/data_logger.hpp"
 
+#ifdef WITH_ROS2
+#include "tasks/ros2_bridge_task.hpp"   // ROS2 /joint_command 브리지 (CMake WITH_ROS2)
+#include <rclcpp/rclcpp.hpp>
+#endif
+
 #include <csignal>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -71,9 +76,17 @@ bool setup_memory_locking() {
     return true;
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
     if (!acquire_lock("/tmp/robot_simul.lock")) return 1;
     setup_memory_locking();
+
+#ifdef WITH_ROS2
+    // ROS2 초기화 — 프레임워크보다 먼저. 노드는 Ros2CmdBridge 가 spin 한다.
+    rclcpp::init(argc, argv);
+    auto ros_node = std::make_shared<rclcpp::Node>("wire_manipulator_sim_cmd");
+#else
+    (void)argc; (void)argv;
+#endif
 
     try {
         rtfw::RealTimeFramework framework;
@@ -88,14 +101,22 @@ int main(int /*argc*/, char** /*argv*/) {
         framework.registerTask(std::make_unique<task_pool::MujocoEnv>(), 200);
         framework.registerNonRtTask(std::make_unique<task_pool::WsBridgeTask>(), 30);
         framework.registerNonRtTask(std::make_unique<task_pool::DataLogger>(), 200);
+#ifdef WITH_ROS2
+        // ROS2 조인트 명령 브리지(/joint_command 구독 → ros2/jointN/cmd 발행)
+        framework.registerNonRtTask(std::make_unique<task_pool::Ros2CmdBridge>(ros_node), 100);
+#endif
 
-        // 프레임워크 설정 — non-RT 스레드 2개(MujocoEnv + 브리지/로거)
+        // 프레임워크 설정 — non-RT 스레드(MujocoEnv + 브리지/로거 [+ ROS2])
         rtfw::FrameworkConfig config;
         config.mode           = rtfw::Mode::LIVE;
         config.realtime_level = RealtimeLevel::SOFT;
         config.threads.num_common_threads     = 4;
         config.threads.dedicated_core_threads = {{6, 1}, {7, 1}};
+#ifdef WITH_ROS2
+        config.threads.num_non_rt_threads     = 3;  // MujocoEnv + 브리지/로거 + ROS2
+#else
         config.threads.num_non_rt_threads     = 2;
+#endif
         config.parameter_file_path = "config/robotnl.yaml";
         config.log_level = rtfw::LogLevel::INFO;
 
@@ -104,7 +125,14 @@ int main(int /*argc*/, char** /*argv*/) {
 
     } catch (const std::exception& e) {
         std::cerr << "FATAL: " << e.what() << "\n";
+#ifdef WITH_ROS2
+        rclcpp::shutdown();
+#endif
         return 1;
     }
+
+#ifdef WITH_ROS2
+    rclcpp::shutdown();
+#endif
     return 0;
 }

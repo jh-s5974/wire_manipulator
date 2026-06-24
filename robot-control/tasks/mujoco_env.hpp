@@ -147,8 +147,12 @@ public:
 
                 const int act_idx = actuator_indices_[i];
                 if (cmd.duration_ms > 0.0) {
-                    if (!cmd_interp_[i].active ||
+                    // 목표값이 "바뀔 때만" 한 번 보간을 시작한다(현재→새 목표).
+                    // 램프가 끝났다는 이유(active=false)만으로는 재시작하지 않으므로,
+                    // ROS 가 같은 명령을 10Hz로 계속 보내도 끄떡거리지 않고 목표를 유지한다.
+                    if (!cmd_interp_[i].has_target ||
                         std::abs(cmd.pos - cmd_interp_[i].target_pos) > 1e-4) {
+                        cmd_interp_[i].has_target  = true;
                         cmd_interp_[i].start_ref   = data_->qpos[joint_qpos_adr_[i]];
                         cmd_interp_[i].target_pos  = cmd.pos;
                         cmd_interp_[i].duration_ms = cmd.duration_ms;
@@ -156,8 +160,12 @@ public:
                         cmd_interp_[i].active       = true;
                     }
                 } else {
-                    cmd_interp_[i].active = false;
-                    des_pos_[act_idx]     = cmd.pos;
+                    // 즉시 이동: 보간 끄고 목표를 바로 적용. target_pos 도 갱신해 두어야
+                    // 이후 duration>0 동일 목표 명령이 불필요하게 재보간하지 않는다.
+                    cmd_interp_[i].active      = false;
+                    cmd_interp_[i].has_target  = true;
+                    cmd_interp_[i].target_pos  = cmd.pos;
+                    des_pos_[act_idx]          = cmd.pos;
                 }
                 des_vel_[act_idx] = cmd.vel;
                 ff_tau_[act_idx]  = cmd.torque;
@@ -481,8 +489,9 @@ private:
 
     struct MotorCmdInterp {
         bool   active      = false;
+        bool   has_target  = false;   // 첫 명령 수신 여부(첫 명령은 무조건 보간 시작)
         double start_ref   = 0.0;
-        double target_pos  = 0.0;
+        double target_pos  = 0.0;     // 마지막으로 명령된 목표(변화 감지 기준)
         double duration_ms = 0.0;
         double elapsed_ms  = 0.0;
     };

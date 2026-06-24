@@ -43,6 +43,12 @@ struct ManagerState {
     std::array<bool, N_JOINTS>                   gui_motor_on{};
     std::array<bool, N_JOINTS>                   gui_motor_on_online{};
 
+    // ROS 명령 소스 — ros_mode=true 일 때 GUI 대신 ros2/jointN/cmd 를 사용한다.
+    // (GUI/모터/ROS 명령 소스를 GUI 토글로 전환 — gui/ros_mode 채널)
+    bool ros_mode = false;
+    std::array<custom_types::MotorCmd, N_JOINTS> ros_motor_cmd{};
+    std::array<bool, N_JOINTS>                   ros_motor_cmd_online{};
+
     struct {
         uint64_t motor[N_JOINTS]{};
     } wdt;
@@ -68,6 +74,8 @@ public:
         s.gui_motor_cmd_online.fill(false);
         s.gui_motor_on_online.fill(false);
         s.gui_motor_on.fill(true);
+        s.ros_mode = false;
+        s.ros_motor_cmd_online.fill(false);
         for (int i = 0; i < N_JOINTS; i++) {
             s.wdt.motor[i] = 0;
             s.robot_state.motor[i] = {};
@@ -123,7 +131,23 @@ public:
                         s.gui_motor_cmd[i]        = safe;
                         s.gui_motor_cmd_online[i] = true;
                     }
+                    // 전원 ON 직후엔 직전에 받아둔(오래된) ROS 명령으로 갑자기 튀지 않도록
+                    // ROS 소스를 잠시 비활성화한다. 새 ROS 프레임이 오면 다시 ROS가 구동한다.
+                    s.ros_motor_cmd_online[i] = false;
                 }
+            });
+        }
+
+        // ROS 모드 토글 + ROS 조인트 명령 수신 (ros_mode=true 일 때 GUI 대신 사용)
+        dr_ros_mode.on_update([&](const bool& on) {
+            if (on != s.ros_mode)
+                getLogger()->info("[{}] ROS command mode {}", getName(), on ? "ENABLED" : "DISABLED");
+            s.ros_mode = on;
+        });
+        for (int i = 0; i < N_JOINTS; i++) {
+            dr_ros_cmd[i].on_update([&, i](const custom_types::MotorCmd& data) {
+                s.ros_motor_cmd[i]        = data;
+                s.ros_motor_cmd_online[i] = true;
             });
         }
 
@@ -144,6 +168,24 @@ public:
         PERIODIC_CALL(
             getLogger()->info("[{}] State={}", getName(), state_to_string(s.state_));
         , 5s);
+
+        // [DIAG] 임시 진단 — ROS 소스 전환 상태. 원인 확인 후 제거.
+        //   ros_mode    : 토글이 Manager까지 도달했는지 (gui/ros_mode 채널)
+        //   ros_online  : ROS 브리지 명령이 도착한 조인트 수 (ros2/jointN/cmd 채널)
+        //   gui_online  : GUI 명령이 도착한 조인트 수
+        //   granted     : 제어 권한
+        //   src         : 현재 실제로 선택되는 명령 소스
+        PERIODIC_CALL(
+            int ros_on = 0;
+            int gui_on = 0;
+            for (int i = 0; i < N_JOINTS; i++) {
+                if (s.ros_motor_cmd_online[i]) ros_on++;
+                if (s.gui_motor_cmd_online[i]) gui_on++;
+            }
+            getLogger()->info("[{}] DIAG ros_mode={} ros_online={}/{} gui_online={}/{} granted={} src={}",
+                              getName(), s.ros_mode, ros_on, N_JOINTS, gui_on, N_JOINTS,
+                              s.gui_control_granted, (s.ros_mode && ros_on > 0) ? "ROS" : "GUI");
+        , 1s);
     }
 
 private:
@@ -209,8 +251,17 @@ private:
         if (!s.gui_control_granted) return;
 
         for (int i = 0; i < N_JOINTS; i++) {
-            if (s.gui_motor_cmd_online[i])
+            // 명령 소스 선택:
+            //   - ROS 모드이고 해당 조인트의 ROS 명령이 도착했으면 ROS 명령을 사용.
+            //   - 그 외(GUI 모드, 또는 ROS 모드지만 아직 ROS 미수신)에는 GUI 명령
+            //     (전원 ON 시 깔아둔 safe-hold 시드 포함)을 사용.
+            // ROS 미수신 구간에도 매 틱 명령이 전달되어 SafetyLayer "manager cmd
+            // timeout"(LOCK)을 방지하고, 모터는 그 자리에서 안전하게 홀드한다.
+            if (s.ros_mode && s.ros_motor_cmd_online[i])
+                dw_mtr_cmd[i].write(s.ros_motor_cmd[i]);
+            else if (s.gui_motor_cmd_online[i])
                 dw_mtr_cmd[i].write(s.gui_motor_cmd[i]);
+
             if (s.gui_motor_on_online[i])
                 dw_motor_on[i].write(s.gui_motor_on[i]);
         }
@@ -267,6 +318,16 @@ private:
         DataReader<bool>{"gui/joint2/on", DependencyType::Weak},
         DataReader<bool>{"gui/joint3/on", DependencyType::Weak},
         DataReader<bool>{"gui/joint4/on", DependencyType::Weak},
+    };
+
+    // ROS 명령 소스 — GUI 토글(gui/ros_mode)과 ROS 브리지가 발행하는 조인트 명령
+    DataReader<bool> dr_ros_mode{"gui/ros_mode", DependencyType::Weak};
+    DataReader<custom_types::MotorCmd> dr_ros_cmd[N_JOINTS] = {
+        DataReader<custom_types::MotorCmd>{"ros2/joint0/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"ros2/joint1/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"ros2/joint2/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"ros2/joint3/cmd", DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{"ros2/joint4/cmd", DependencyType::Weak},
     };
 
     DataWriter<custom_types::MotorCmd> dw_mtr_cmd[N_JOINTS] = {

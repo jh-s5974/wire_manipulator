@@ -21,6 +21,11 @@
 #include "tasks/ws_server/ws_bridge_task.hpp"
 #include "tasks/data_logger.hpp"
 
+#ifdef WITH_ROS2
+#include "tasks/ros2_bridge_task.hpp"   // ROS2 /joint_command 브리지 (CMake WITH_ROS2)
+#include <rclcpp/rclcpp.hpp>
+#endif
+
 #include <csignal>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -50,8 +55,16 @@ bool setup_memory_locking() {
     return true;
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
     setup_memory_locking();
+
+#ifdef WITH_ROS2
+    // ROS2 초기화 — 프레임워크보다 먼저. 노드는 Ros2CmdBridge 가 spin 한다.
+    rclcpp::init(argc, argv);
+    auto ros_node = std::make_shared<rclcpp::Node>("wire_manipulator_cmd");
+#else
+    (void)argc; (void)argv;
+#endif
 
     try {
         rtfw::RealTimeFramework framework;
@@ -67,6 +80,10 @@ int main(int /*argc*/, char** /*argv*/) {
         // Non-RT 태스크 등록 — GUI 브리지와 로거(타이밍 민감하지 않음)
         framework.registerNonRtTask(std::make_unique<task_pool::WsBridgeTask>(), 30);
         framework.registerNonRtTask(std::make_unique<task_pool::DataLogger>(), 60);
+#ifdef WITH_ROS2
+        // ROS2 조인트 명령 브리지(/joint_command 구독 → ros2/jointN/cmd 발행)
+        framework.registerNonRtTask(std::make_unique<task_pool::Ros2CmdBridge>(ros_node), 100);
+#endif
 
         // 프레임워크 설정 — 스레드 풀, 전용 코어(6,7 각 1개), 파라미터 파일 경로
         rtfw::FrameworkConfig config;
@@ -74,7 +91,11 @@ int main(int /*argc*/, char** /*argv*/) {
         config.realtime_level = RealtimeLevel::SOFT;
         config.threads.num_common_threads      = 4;
         config.threads.dedicated_core_threads  = {{6, 1}, {7, 1}};
+#ifdef WITH_ROS2
+        config.threads.num_non_rt_threads      = 2;  // WsBridge+DataLogger+ROS2 브리지
+#else
         config.threads.num_non_rt_threads      = 1;
+#endif
         config.parameter_file_path = "config/robotnl.yaml";
         config.log_level = rtfw::LogLevel::INFO;
 
@@ -82,7 +103,14 @@ int main(int /*argc*/, char** /*argv*/) {
         framework.start();  // 블로킹 — stop() 호출 시까지 실행
     } catch (const std::exception& e) {
         std::cerr << "FATAL: " << e.what() << "\n";
+#ifdef WITH_ROS2
+        rclcpp::shutdown();
+#endif
         return 1;
     }
+
+#ifdef WITH_ROS2
+    rclcpp::shutdown();
+#endif
     return 0;
 }

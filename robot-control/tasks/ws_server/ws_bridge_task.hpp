@@ -160,6 +160,21 @@ private:
         DataReader<custom_types::MotorIoStats>{kPhysIoChannels[6], DependencyType::Weak},
     };
 
+    // ── ROS2 조인트 명령 수신값 (GUI 표시용) ──
+    // Ros2CmdBridge 가 /joint_command 수신 시 발행하는 내부단위(rad/m) 채널을 구독한다.
+    // ros_mode 와 무관하게 "현재 들어오는 ROS 명령"을 GUI 에 그대로 보여주기 위함.
+    static constexpr const char* kRos2CmdChannels[kJointCount] = {
+        "ros2/joint0/cmd", "ros2/joint1/cmd", "ros2/joint2/cmd",
+        "ros2/joint3/cmd", "ros2/joint4/cmd",
+    };
+    DataReader<custom_types::MotorCmd> dr_ros2_cmd_[kJointCount] = {
+        DataReader<custom_types::MotorCmd>{kRos2CmdChannels[0], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kRos2CmdChannels[1], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kRos2CmdChannels[2], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kRos2CmdChannels[3], DependencyType::Weak},
+        DataReader<custom_types::MotorCmd>{kRos2CmdChannels[4], DependencyType::Weak},
+    };
+
     // ── 모터 명령 모드 — 물리 모터 직접 명령/on 채널 (CanBus0/1 구독) ──
     DataWriter<custom_types::MotorCmd> dw_phys_cmd_[kPhysCount] = {
         DataWriter<custom_types::MotorCmd>{kPhysCmdChannels[0]},
@@ -181,6 +196,8 @@ private:
     };
     // 모터 명령 모드 전역 플래그 — true: CanBus0/1이 조인트 IK를 우회하고 phys_motor cmd를 직접 적용
     DataWriter<bool> dw_motor_raw_mode_{"gui/motor_raw_mode"};
+    // ROS 명령 모드 전역 플래그 — true: Manager가 조인트 명령 소스를 GUI 대신 ROS2로 전환
+    DataWriter<bool> dw_ros_mode_{"gui/ros_mode"};
 
     // 공통 GUI 상태 채널
     DataReader<bool> dr_control_requested_{"gui/motor/control_requested", DependencyType::Weak};
@@ -218,6 +235,8 @@ private:
     std::array<bool,                     kPhysCount> phys_power_on_{};
     std::array<custom_types::MotorCmd,   kPhysCount> phys_cmd_applied_cache_{};
     std::array<bool,                     kPhysCount> phys_cmd_applied_online_{};
+    std::array<custom_types::MotorCmd,   kJointCount> ros2_cmd_cache_{};      // ROS2 수신값(내부단위)
+    std::array<bool,                     kJointCount> ros2_cmd_online_{};     // 조인트별 수신 여부
 
     bool control_requested_ = false;
     bool control_granted_   = false;
@@ -254,6 +273,10 @@ private:
             joints_[i].applied_cmd.on_update([&, i](const custom_types::MotorCmd& d) {
                 applied_cmd_cache_[i]  = d;
                 applied_cmd_online_[i] = true;
+            });
+            dr_ros2_cmd_[i].on_update([&, i](const custom_types::MotorCmd& d) {
+                ros2_cmd_cache_[i]  = d;
+                ros2_cmd_online_[i] = true;
             });
         }
         dr_control_requested_.on_update([&](const bool& v) { control_requested_ = v; });
@@ -343,6 +366,20 @@ private:
         st.data_logger.sample_count = logger_info_.sample_count;
         st.data_logger.filename     = logger_info_.filename;
 
+        // ROS2 /joint_command 수신값 — 내부단위(rad/m) → 표시단위(deg/mm) 역변환
+        // (revolute 0/1/3: rad→deg, prismatic 2/4: m→mm). 한 조인트라도 수신했으면 online.
+        bool ros2_any = false;
+        st.ros2_cmd.values.assign(kJointCount, 0.0);
+        for (int i = 0; i < kJointCount; i++) {
+            if (!ros2_cmd_online_[i]) continue;
+            ros2_any = true;
+            const bool prismatic = (i == 2 || i == 4);
+            const double internal = ros2_cmd_cache_[i].pos;
+            st.ros2_cmd.values[i] = prismatic ? (internal * 1000.0)         // m → mm
+                                              : (internal * 180.0 / M_PI);  // rad → deg
+        }
+        st.ros2_cmd.online = ros2_any;
+
         return st;
     }
 
@@ -377,6 +414,9 @@ private:
                 break;
             case wsbridge::Event::Kind::ViewMode:
                 handle_view_mode(ev.view_mode);
+                break;
+            case wsbridge::Event::Kind::RosMode:
+                handle_ros_mode(ev.ros_mode);
                 break;
         }
     }
@@ -488,6 +528,12 @@ private:
         const bool raw = (vm.mode == "motor");
         dw_motor_raw_mode_.write(raw);
         getLogger()->info("[{}] view_mode={} (raw_mode={})", getName(), vm.mode, raw);
+    }
+
+    // ROS 명령 모드 토글 → Manager 가 조인트 명령 소스를 GUI ↔ ROS2 로 전환
+    void handle_ros_mode(const wsbridge::Event::RosModePayload& rm) {
+        dw_ros_mode_.write(rm.enabled);
+        getLogger()->info("[{}] ros_mode={}", getName(), rm.enabled);
     }
 
     void handle_data_logger(const wsbridge::Event::DataLoggerPayload& payload) {

@@ -406,6 +406,57 @@ function JointLimitsTable() {
   );
 }
 
+// ROS2 /joint_command 로 들어온 5개 조인트 목표값 표시 (표시 단위: deg,deg,mm,deg,mm)
+const ROS2_JOINT_META = [
+  { name: "joint0", label: "base_yaw", unit: "deg" },
+  { name: "joint1", label: "pitch", unit: "deg" },
+  { name: "joint2", label: "lower_link", unit: "mm" },
+  { name: "joint3", label: "elbow_pitch", unit: "deg" },
+  { name: "joint4", label: "upper_link", unit: "mm" },
+] as const;
+
+function Ros2CmdTable({ cmd }: { cmd?: { online: boolean; values: number[] } }) {
+  const online = cmd?.online ?? false;
+  const values = cmd?.values ?? [];
+  return (
+    <div className="card card-ros2cmd">
+      <div className="card-header">
+        <h3>ROS2 Joint Cmd</h3>
+        <span className={`ros2-cmd-status ${online ? "on" : "off"}`}>
+          {online ? "수신" : "대기"}
+        </span>
+      </div>
+      <div className="table-wrapper">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Joint</th>
+              <th>Name</th>
+              <th>Value</th>
+              <th>Unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ROS2_JOINT_META.map((meta, i) => {
+              const v = values[i];
+              const hasV = online && typeof v === "number" && Number.isFinite(v);
+              return (
+                <tr key={meta.name}>
+                  <td><strong>{meta.name}</strong></td>
+                  <td>{meta.label}</td>
+                  <td className="num">{hasV ? v.toFixed(3) : "—"}</td>
+                  <td>{meta.unit}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <span className="limits-note">/joint_command 수신값</span>
+    </div>
+  );
+}
+
 const barPcts = (value: number, min: number, max: number) => {
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
   const zeroPct  = clamp(((0 - min) / (max - min)) * 100);
@@ -696,6 +747,7 @@ function App() {
     sendPhysMotorPower,
     sendPhysMotorCommand,
     sendViewMode,
+    sendRosMode,
     sendMotorControlRequest,
     sendSafetyReset,
     sendDataLogger,
@@ -741,6 +793,7 @@ function App() {
   const [selectedPhysMotorIds, setSelectedPhysMotorIds] = React.useState<Set<number>>(new Set());
   const [bulkCmd, setBulkCmd] = React.useState<MotorCommandFields>(EMPTY_MOTOR_COMMAND);
   const [showJointView, setShowJointView] = React.useState(true); // true = 조인트 뷰(ON), false = 모터 뷰(OFF)
+  const [rosMode, setRosMode] = React.useState(false); // true = ROS 명령 모드(조인트 명령 소스를 ROS2 토픽으로 전환)
   const [showPlot, setShowPlot] = React.useState(false);
   const [plotPaused, setPlotPaused] = React.useState(false);
   const [plotColumns, setPlotColumns] = React.useState(DEFAULT_PLOT_COLUMNS);
@@ -1705,10 +1758,20 @@ function App() {
             <button className="btn btn-secondary btn-xxs" onClick={handleAllOff} disabled={!canControl}>
               Off All
             </button>
-            <label className="toggle-switch" title={showJointView ? "조인트 뷰 ON → 클릭 시 모터 뷰로 전환" : "모터 뷰 ON → 클릭 시 조인트 뷰로 전환"}>
+            <label
+              className="toggle-switch"
+              title={
+                rosMode
+                  ? "ROS 명령 모드 중에는 뷰 전환 불가 (조인트 뷰 고정)"
+                  : showJointView
+                    ? "조인트 뷰 ON → 클릭 시 모터 뷰로 전환"
+                    : "모터 뷰 ON → 클릭 시 조인트 뷰로 전환"
+              }
+            >
               <input
                 type="checkbox"
                 checked={showJointView}
+                disabled={rosMode}
                 onChange={() => {
                   setShowJointView((prev) => {
                     const next = !prev;
@@ -1721,6 +1784,36 @@ function App() {
             </label>
             <span className="toolbar-label" style={{ minWidth: 60 }}>
               {showJointView ? "조인트 뷰" : "모터 뷰"}
+            </span>
+            {/* ROS 명령 모드 토글 — 조인트 명령 소스를 GUI ↔ ROS2 토픽으로 전환 */}
+            <label
+              className="toggle-switch"
+              title={
+                rosMode
+                  ? "ROS 명령 모드 ON → 클릭 시 GUI 명령 모드로 전환"
+                  : "GUI 명령 모드 ON → 클릭 시 ROS 명령 모드로 전환 (/joint_command 토픽으로 제어)"
+              }
+            >
+              <input
+                type="checkbox"
+                checked={rosMode}
+                onChange={() => {
+                  setRosMode((prev) => {
+                    const next = !prev;
+                    // ROS는 조인트 위치 명령을 보내므로, 모터 뷰(raw)였다면 조인트 뷰로 강제 전환
+                    if (next && !showJointView) {
+                      setShowJointView(true);
+                      sendViewMode("joint");
+                    }
+                    sendRosMode(next);
+                    return next;
+                  });
+                }}
+              />
+              <span className="toggle-slider" />
+            </label>
+            <span className="toolbar-label" style={{ minWidth: 64 }}>
+              {rosMode ? "ROS 명령" : "GUI 명령"}
             </span>
             <button className="btn btn-secondary btn-xs" onClick={() => setShowPlot((prev) => !prev)}>
               {showPlot ? "Plot Hide" : "Plot Show"}
@@ -1995,9 +2088,10 @@ function App() {
               </div>
             </div>
 
-            {/* Joint Limits 카드 — config/robotnl.yaml 기준 */}
+            {/* Joint Limits 카드 — config/robotnl.yaml 기준 + ROS2 수신값 표 */}
             <div className="bottom-row">
               <JointLimitsTable />
+              <Ros2CmdTable cmd={state?.ros2_cmd} />
             </div>
 
             {showPlot && (
